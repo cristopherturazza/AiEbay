@@ -1,0 +1,10 @@
+{
+  "marketplaceId": "eBay_IT",
+  "locale": "it-IT",
+  "merchantLocationKey": "MILANO_WAREHOUSE",
+  "policies": {
+    "fulfillmentPolicyId": "6200000000",
+    "paymentPolicyId": "6300000000",
+    "returnPolicyId": "6400000000"
+  }
+}
