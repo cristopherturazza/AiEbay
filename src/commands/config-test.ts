@@ -1,7 +1,7 @@
-import { loadRuntimeConfig, missingPublishConfigItems, requireOAuthConfig } from "../config.js";
+import { loadRuntimeConfig, missingPublishConfigItems, requirePublishConfiguration } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { EbayAccountClient } from "../ebay/account.js";
-import { EbayOAuthClient } from "../ebay/oauth.js";
+import { createUserOAuthClient } from "../ebay/oauth-client-factory.js";
 import { logger } from "../logger.js";
 import { getValidUserAccessToken } from "../token/token-store.js";
 
@@ -21,6 +21,19 @@ const printCheck = (check: CheckResult): void => {
   logger.info(`[${symbol}] ${check.name}`);
 };
 
+const runCheck = async (name: string, operation: () => Promise<unknown>): Promise<CheckResult> => {
+  try {
+    await operation();
+    return { name, ok: true };
+  } catch (error) {
+    return {
+      name,
+      ok: false,
+      detail: (error as Error).message
+    };
+  }
+};
+
 export const runConfigTest = async (): Promise<void> => {
   const config = await loadRuntimeConfig();
   const checks: CheckResult[] = [];
@@ -33,18 +46,10 @@ export const runConfigTest = async (): Promise<void> => {
   });
 
   let accessToken: string | null = null;
+  let publishConfig: ReturnType<typeof requirePublishConfiguration> | null = null;
 
   try {
-    const oauthConfig = requireOAuthConfig(config);
-    const oauthClient = new EbayOAuthClient({
-      clientId: oauthConfig.clientId,
-      clientSecret: oauthConfig.clientSecret,
-      redirectUri: oauthConfig.redirectUri,
-      scopes: config.ebayScopes,
-      environment: config.ebayEnv === "sandbox" ? "SANDBOX" : "PRODUCTION",
-      authBaseUrl: config.ebayAuthBaseUrl,
-      apiBaseUrl: config.ebayApiBaseUrl
-    });
+    const oauthClient = createUserOAuthClient(config);
 
     accessToken = await getValidUserAccessToken(config, oauthClient);
     checks.push({ name: "Token valido (o refresh riuscito)", ok: true });
@@ -56,42 +61,26 @@ export const runConfigTest = async (): Promise<void> => {
     });
   }
 
-  if (accessToken && missing.length === 0) {
+  if (missing.length === 0) {
+    publishConfig = requirePublishConfiguration(config);
+  }
+
+  if (accessToken && publishConfig) {
     const accountClient = new EbayAccountClient({ apiBaseUrl: config.ebayApiBaseUrl });
 
     const policyChecks: Array<Promise<CheckResult>> = [
-      accountClient
-        .getFulfillmentPolicy(accessToken, config.policies.fulfillmentPolicyId!)
-        .then(() => ({ name: "Fulfillment policy accessibile", ok: true }))
-        .catch((error) => ({
-          name: "Fulfillment policy accessibile",
-          ok: false,
-          detail: (error as Error).message
-        })),
-      accountClient
-        .getPaymentPolicy(accessToken, config.policies.paymentPolicyId!)
-        .then(() => ({ name: "Payment policy accessibile", ok: true }))
-        .catch((error) => ({
-          name: "Payment policy accessibile",
-          ok: false,
-          detail: (error as Error).message
-        })),
-      accountClient
-        .getReturnPolicy(accessToken, config.policies.returnPolicyId!)
-        .then(() => ({ name: "Return policy accessibile", ok: true }))
-        .catch((error) => ({
-          name: "Return policy accessibile",
-          ok: false,
-          detail: (error as Error).message
-        })),
-      accountClient
-        .getInventoryLocation(accessToken, config.merchantLocationKey!)
-        .then(() => ({ name: "merchantLocationKey accessibile", ok: true }))
-        .catch((error) => ({
-          name: "merchantLocationKey accessibile",
-          ok: false,
-          detail: (error as Error).message
-        }))
+      runCheck("Fulfillment policy accessibile", async () =>
+        accountClient.getFulfillmentPolicy(accessToken, publishConfig.policies.fulfillmentPolicyId)
+      ),
+      runCheck("Payment policy accessibile", async () =>
+        accountClient.getPaymentPolicy(accessToken, publishConfig.policies.paymentPolicyId)
+      ),
+      runCheck("Return policy accessibile", async () =>
+        accountClient.getReturnPolicy(accessToken, publishConfig.policies.returnPolicyId)
+      ),
+      runCheck("merchantLocationKey accessibile", async () =>
+        accountClient.getInventoryLocation(accessToken, publishConfig.merchantLocationKey)
+      )
     ];
 
     checks.push(...(await Promise.all(policyChecks)));

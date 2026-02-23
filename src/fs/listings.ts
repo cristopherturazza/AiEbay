@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { ZodError } from "zod";
-import { SellbotError } from "../errors.js";
+import { SellbotError, isSellbotError } from "../errors.js";
 import { draftSchema, ebayBuildSchema, statusSchema } from "../schemas/index.js";
 import type { Draft, EbayBuild, Status } from "../types.js";
 import { readJsonFile, writeJsonFile } from "../utils/json.js";
@@ -121,6 +121,21 @@ export const readStatus = async (statusPath: string): Promise<Status> => {
 
 export const writeStatus = async (statusPath: string, status: Status): Promise<void> => {
   await writeJsonFile(statusPath, statusSchema.parse(status));
+};
+
+export const readStatusOrEmpty = async (statusPath: string): Promise<Status> => {
+  try {
+    return await readStatus(statusPath);
+  } catch (error) {
+    if (
+      isSellbotError(error) &&
+      (error.code === "STATUS_INVALID" || error.code === "JSON_PARSE_ERROR")
+    ) {
+      return emptyStatus();
+    }
+
+    throw error;
+  }
 };
 
 const directoryExists = async (candidate: string): Promise<boolean> => {

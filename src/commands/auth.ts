@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { loadRuntimeConfig, requireOAuthConfig } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { logger } from "../logger.js";
-import { EbayOAuthClient } from "../ebay/oauth.js";
+import { createUserOAuthClient } from "../ebay/oauth-client-factory.js";
 import { saveToken } from "../token/token-store.js";
 import { openInBrowser } from "../utils/browser.js";
 
@@ -28,15 +28,7 @@ export const runAuth = async (): Promise<void> => {
   const oauthConfig = requireOAuthConfig(config);
   const redirectUrl = assertLocalRedirectUri(oauthConfig.redirectUri);
 
-  const oauthClient = new EbayOAuthClient({
-    clientId: oauthConfig.clientId,
-    clientSecret: oauthConfig.clientSecret,
-    redirectUri: oauthConfig.redirectUri,
-    scopes: config.ebayScopes,
-    environment: config.ebayEnv === "sandbox" ? "SANDBOX" : "PRODUCTION",
-    authBaseUrl: config.ebayAuthBaseUrl,
-    apiBaseUrl: config.ebayApiBaseUrl
-  });
+  const oauthClient = createUserOAuthClient(config);
 
   const state = oauthClient.createState();
   const consentUrl = oauthClient.createConsentUrl(state);
@@ -107,14 +99,8 @@ export const runAuth = async (): Promise<void> => {
         await openInBrowser(consentUrl);
         logger.info("Browser aperto sulla pagina di autorizzazione eBay");
       } catch (error) {
-        server.close();
-        finish(() =>
-          reject(
-            new SellbotError(
-              "BROWSER_OPEN_FAILED",
-              `Impossibile aprire il browser automaticamente: ${(error as Error).message}`
-            )
-          )
+        logger.warn(
+          `Impossibile aprire il browser automaticamente: ${(error as Error).message}. Apri manualmente: ${consentUrl}`
         );
       }
     });

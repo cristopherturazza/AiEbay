@@ -1,11 +1,19 @@
 import { z } from "zod";
 
-const statusErrorSchema = z.object({
+export const statusErrorSchema = z.object({
   message: z.string(),
   http_status: z.number().int().nullable().optional(),
   response_snippet: z.string().nullable().optional(),
   at: z.string().datetime().optional()
 });
+
+const normalizedStatusErrorSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    return { message: value };
+  }
+
+  return value;
+}, statusErrorSchema);
 
 export const statusSchema = z.object({
   state: z.enum(["draft", "ready", "published", "error"]),
@@ -16,5 +24,5 @@ export const statusSchema = z.object({
     listing_id: z.string().nullable(),
     url: z.string().nullable()
   }),
-  last_error: z.union([statusErrorSchema, z.string()]).nullable()
+  last_error: normalizedStatusErrorSchema.nullable()
 });

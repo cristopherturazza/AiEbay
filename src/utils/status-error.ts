@@ -1,4 +1,5 @@
 import { EbayApiError } from "../ebay/http.js";
+import { isSellbotError } from "../errors.js";
 
 export const toStatusError = (error: unknown): {
   message: string;
@@ -16,6 +17,22 @@ export const toStatusError = (error: unknown): {
   }
 
   if (error instanceof Error) {
+    if (isSellbotError(error)) {
+      const details = error.details as
+        | { status?: unknown; responseSnippet?: unknown; responseSnippetText?: unknown }
+        | undefined;
+
+      const maybeStatus = details?.status;
+      const maybeSnippet = details?.responseSnippet ?? details?.responseSnippetText;
+
+      return {
+        message: `${error.code}: ${error.message}`,
+        http_status: typeof maybeStatus === "number" ? maybeStatus : null,
+        response_snippet: typeof maybeSnippet === "string" ? maybeSnippet : null,
+        at: new Date().toISOString()
+      };
+    }
+
     return {
       message: error.message,
       http_status: null,

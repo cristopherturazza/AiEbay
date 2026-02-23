@@ -5,6 +5,13 @@ interface InventoryClientOptions {
   httpClient?: HttpClient;
 }
 
+export interface OfferListingPolicies {
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+  [key: string]: unknown;
+}
+
 export interface InventoryItemPayload {
   availability: {
     shipToLocationAvailability: {
@@ -28,11 +35,7 @@ export interface CreateOfferPayload {
   categoryId: string;
   merchantLocationKey: string;
   listingDescription: string;
-  listingPolicies: {
-    fulfillmentPolicyId: string;
-    paymentPolicyId: string;
-    returnPolicyId: string;
-  };
+  listingPolicies: OfferListingPolicies;
   listingDuration: string;
   pricingSummary: {
     price: {
@@ -48,6 +51,62 @@ interface CreateOfferResponse {
 
 interface PublishOfferResponse {
   listingId?: string;
+}
+
+export interface OfferResponse {
+  offerId: string;
+  sku?: string;
+  marketplaceId?: string;
+  format?: "FIXED_PRICE" | "AUCTION";
+  availableQuantity?: number;
+  categoryId?: string;
+  merchantLocationKey?: string;
+  listingDescription?: string;
+  listingPolicies?: OfferListingPolicies;
+  listingDuration?: string;
+  pricingSummary?: {
+    price?: {
+      value?: string;
+      currency?: string;
+    };
+  };
+  includeCatalogProductDetails?: boolean;
+  hideBuyerDetails?: boolean;
+  quantityLimitPerBuyer?: number;
+  listingStartDate?: string;
+  lotSize?: number;
+  charity?: unknown;
+  extendedProducerResponsibility?: unknown;
+  tax?: unknown;
+  listing?: {
+    listingId?: string;
+  };
+}
+
+export interface UpdateOfferPayload {
+  sku: string;
+  marketplaceId: string;
+  format: "FIXED_PRICE" | "AUCTION";
+  availableQuantity: number;
+  categoryId: string;
+  merchantLocationKey: string;
+  listingDescription: string;
+  listingPolicies: OfferListingPolicies;
+  listingDuration: string;
+  pricingSummary: {
+    price: {
+      value: string;
+      currency: string;
+    };
+  };
+  includeCatalogProductDetails?: boolean;
+  hideBuyerDetails?: boolean;
+  quantityLimitPerBuyer?: number;
+  listingStartDate?: string;
+  lotSize?: number;
+  charity?: unknown;
+  extendedProducerResponsibility?: unknown;
+  tax?: unknown;
 }
 
 export class EbayInventoryClient {
@@ -104,6 +163,38 @@ export class EbayInventoryClient {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       }
+    });
+  }
+
+  // getOffer (docs):
+  // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/getOffer
+  async getOffer(accessToken: string, offerId: string): Promise<OfferResponse> {
+    return this.httpClient.requestJson<OfferResponse>({
+      method: "GET",
+      url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+  }
+
+  // updateOffer (docs):
+  // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/updateOffer
+  async updateOffer(
+    accessToken: string,
+    offerId: string,
+    payload: UpdateOfferPayload,
+    locale: string
+  ): Promise<void> {
+    await this.httpClient.requestVoid({
+      method: "PUT",
+      url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Language": locale,
+        "Content-Type": "application/json"
+      },
+      json: payload
     });
   }
 }

@@ -17,10 +17,14 @@ export interface HttpRequestOptions {
   headers?: Record<string, string>;
   json?: unknown;
   body?: BodyInit;
+  timeoutMs?: number;
 }
 
 export class HttpClient {
-  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly defaultTimeoutMs = 30_000
+  ) {}
 
   async requestJson<T>(options: HttpRequestOptions): Promise<T> {
     const response = await this.request(options);
@@ -34,18 +38,19 @@ export class HttpClient {
       return undefined as T;
     }
 
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new SellbotError(
+        "EBAY_RESPONSE_PARSE_ERROR",
+        `Risposta eBay non valida (JSON atteso) su ${options.method} ${options.url}: ${(error as Error).message}`,
+        { responseSnippet: text.slice(0, 500) }
+      );
+    }
   }
 
   async requestVoid(options: HttpRequestOptions): Promise<void> {
-    const response = await this.request(options);
-
-    if (response.status >= 200 && response.status < 300) {
-      return;
-    }
-
-    const text = await response.text();
-    throw new EbayApiError(response.status, `Errore HTTP ${response.status}`, text.slice(0, 500));
+    await this.request(options);
   }
 
   private async request(options: HttpRequestOptions): Promise<Response> {
@@ -59,11 +64,41 @@ export class HttpClient {
       body = JSON.stringify(options.json);
     }
 
-    const response = await this.fetchImpl(options.url, {
-      method: options.method,
-      headers,
-      body
-    });
+    if (!headers.Accept) {
+      headers.Accept = "application/json";
+    }
+
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(options.url, {
+        method: options.method,
+        headers,
+        body,
+        signal: controller.signal
+      });
+    } catch (error) {
+      const err = error as Error;
+      if (err.name === "AbortError") {
+        throw new SellbotError(
+          "EBAY_HTTP_TIMEOUT",
+          `Timeout richiesta eBay dopo ${timeoutMs}ms su ${options.method} ${options.url}`
+        );
+      }
+
+      throw new SellbotError(
+        "EBAY_HTTP_NETWORK",
+        `Errore di rete durante richiesta eBay ${options.method} ${options.url}: ${err.message}`
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const text = await response.text();

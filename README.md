@@ -142,6 +142,23 @@ Riferimenti ufficiali endpoint usati:
 - [createOffer](https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/createOffer)
 - [publishOffer](https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/publishOffer)
 
+### `sellbot revise <folder>`
+
+Corregge una inserzione già pubblicata via API (prezzo, descrizione, immagini), mantenendo `offer_id` esistente:
+
+1. mostra riepilogo aggiornamenti e chiede conferma `Y/n`
+2. sincronizza `ebay.json` dai dati correnti (`draft.json` + `photos/`)
+3. ricarica immagini con Media API
+4. aggiorna Inventory Item (`createOrReplaceInventoryItem`) per titolo/descrizione/aspects/immagini
+5. legge l'offerta corrente (`getOffer`) e invia `updateOffer` con payload completo (merge dei campi esistenti + nuovi valori)
+6. aggiorna `status.json` mantenendo `state=\"published\"`
+
+Riferimenti ufficiali:
+
+- [getOffer](https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/getOffer)
+- [updateOffer](https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/updateOffer)
+- [createOrReplaceInventoryItem](https://developer.ebay.com/api-docs/sell/inventory/resources/inventory_item/methods/createOrReplaceInventoryItem)
+
 ### `sellbot config:test`
 
 Checklist `OK/KO` su:
@@ -166,7 +183,9 @@ Base URL predefiniti:
 
 Puoi override con `EBAY_AUTH_BASE_URL`, `EBAY_API_BASE_URL`, `EBAY_MEDIA_BASE_URL`.
 
-Nota: con OAuth via SDK ufficiale, gli endpoint auth/token seguono `EBAY_ENV` (`sandbox`/`prod`).
+Nota: con OAuth via SDK ufficiale, gli endpoint auth/token seguono `EBAY_ENV` (`sandbox`/`prod`), quindi `EBAY_AUTH_BASE_URL` non viene usato dal flusso OAuth.
+
+Nota importante: le inserzioni create con Inventory API vanno corrette via API (`updateOffer` / `createOrReplaceInventoryItem`), non dal portale Seller Hub.
 
 ## Test minimi
 

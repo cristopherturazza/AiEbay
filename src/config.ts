@@ -64,10 +64,24 @@ const parseScopes = (rawScopes: string | undefined): string[] => {
     return [...DEFAULT_SCOPES];
   }
 
-  return rawScopes
+  const parsed = rawScopes
     .split(/\s+/)
     .map((value) => value.trim())
     .filter(Boolean);
+
+  const uniqueScopes: string[] = [];
+  const seen = new Set<string>();
+
+  for (const scope of parsed) {
+    if (seen.has(scope)) {
+      continue;
+    }
+
+    seen.add(scope);
+    uniqueScopes.push(scope);
+  }
+
+  return uniqueScopes;
 };
 
 const readProjectConfig = async (cwd: string): Promise<z.infer<typeof projectConfigSchema>> => {
@@ -172,4 +186,33 @@ export const missingPublishConfigItems = (config: RuntimeConfig): string[] => {
   }
 
   return missing;
+};
+
+export interface PublishConfiguration {
+  merchantLocationKey: string;
+  policies: {
+    fulfillmentPolicyId: string;
+    paymentPolicyId: string;
+    returnPolicyId: string;
+  };
+}
+
+export const requirePublishConfiguration = (config: RuntimeConfig): PublishConfiguration => {
+  const missing = missingPublishConfigItems(config);
+
+  if (missing.length > 0) {
+    throw new SellbotError(
+      "PUBLISH_CONFIG_MISSING",
+      `Configurazione incompleta in sellbot.config.json: ${missing.join(", ")}`
+    );
+  }
+
+  return {
+    merchantLocationKey: config.merchantLocationKey!,
+    policies: {
+      fulfillmentPolicyId: config.policies.fulfillmentPolicyId!,
+      paymentPolicyId: config.policies.paymentPolicyId!,
+      returnPolicyId: config.policies.returnPolicyId!
+    }
+  };
 };

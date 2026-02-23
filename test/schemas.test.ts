@@ -72,4 +72,20 @@ describe("statusSchema", () => {
       })
     ).toThrow();
   });
+
+  it("normalizza last_error legacy come stringa", () => {
+    const parsed = statusSchema.parse({
+      state: "error",
+      published_at: null,
+      ebay: {
+        sku: null,
+        offer_id: null,
+        listing_id: null,
+        url: null
+      },
+      last_error: "errore legacy"
+    });
+
+    expect(parsed.last_error).toEqual({ message: "errore legacy" });
+  });
 });

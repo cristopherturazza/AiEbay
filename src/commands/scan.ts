@@ -1,12 +1,11 @@
 import { logger } from "../logger.js";
 import {
-  emptyStatus,
   getToSellRoot,
   listListingFolders,
   listPhotoFiles,
   readDraft,
   readNotes,
-  readStatus,
+  readStatusOrEmpty,
   writeDraft,
   writeStatus
 } from "../fs/listings.js";
@@ -25,6 +24,7 @@ export const runScan = async (): Promise<void> => {
 
   let readyCount = 0;
   let draftCount = 0;
+  let publishedCount = 0;
   let createdDraftCount = 0;
 
   for (const listing of listings) {
@@ -54,11 +54,14 @@ export const runScan = async (): Promise<void> => {
       logger.info(`[${listing.slug}] creato draft.json`);
     }
 
-    let status;
-    try {
-      status = await readStatus(listing.statusPath);
-    } catch {
-      status = emptyStatus();
+    const status = await readStatusOrEmpty(listing.statusPath);
+
+    if (status.state === "published") {
+      status.ebay.sku = status.ebay.sku ?? makeSku(listing.slug);
+      await writeStatus(listing.statusPath, status);
+      publishedCount += 1;
+      logger.info(`[${listing.slug}] state=published preservato`);
+      continue;
     }
 
     if (hasPhotos && draft && !draftReadError) {
@@ -89,6 +92,6 @@ export const runScan = async (): Promise<void> => {
   }
 
   logger.info(
-    `Scan completato: cartelle=${listings.length}, ready=${readyCount}, draft=${draftCount}, draft_creati=${createdDraftCount}`
+    `Scan completato: cartelle=${listings.length}, ready=${readyCount}, draft=${draftCount}, published=${publishedCount}, draft_creati=${createdDraftCount}`
   );
 };

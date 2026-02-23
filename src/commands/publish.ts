@@ -1,22 +1,20 @@
-import path from "node:path";
-import { loadRuntimeConfig, missingPublishConfigItems, requireOAuthConfig } from "../config.js";
+import { loadRuntimeConfig, requirePublishConfiguration } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { EbayAccountClient } from "../ebay/account.js";
 import { EbayInventoryClient } from "../ebay/inventory.js";
 import { EbayMediaClient } from "../ebay/media.js";
-import { EbayOAuthClient } from "../ebay/oauth.js";
+import { createUserOAuthClient } from "../ebay/oauth-client-factory.js";
 import {
-  emptyStatus,
   getToSellRoot,
   listPhotoFiles,
   readDraft,
-  readEbayBuild,
-  readStatus,
+  readStatusOrEmpty,
   resolveListing,
   writeStatus
 } from "../fs/listings.js";
 import { logger } from "../logger.js";
-import { buildListing } from "../services/build-listing.js";
+import { syncListingBuildFromDraft } from "../services/build-listing.js";
+import { uploadListingImages, validatePoliciesAndLocation } from "../services/publish-helpers.js";
 import { getValidUserAccessToken } from "../token/token-store.js";
 import { confirm } from "../utils/confirm.js";
 import { toStatusError } from "../utils/status-error.js";
@@ -36,12 +34,8 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
   const config = await loadRuntimeConfig();
   const listing = await resolveListing(getToSellRoot(config.cwd), folder);
 
-  let status;
-  try {
-    status = await readStatus(listing.statusPath);
-  } catch {
-    status = emptyStatus();
-  }
+  const status = await readStatusOrEmpty(listing.statusPath);
+  const previouslyPublished = status.state === "published" || Boolean(status.ebay.listing_id);
 
   try {
     const draft = await readDraft(listing.draftPath);
@@ -71,30 +65,10 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
       }
     }
 
-    let ebayBuild = await readEbayBuild(listing.ebayPath);
-    if (!ebayBuild) {
-      logger.info("ebay.json non trovato: eseguo build automatica");
-      ebayBuild = (await buildListing(listing, config)).ebayBuild;
-    }
+    const { ebayBuild } = await syncListingBuildFromDraft(listing, config);
 
-    const missingConfig = missingPublishConfigItems(config);
-    if (missingConfig.length > 0) {
-      throw new SellbotError(
-        "PUBLISH_CONFIG_MISSING",
-        `Configurazione incompleta in sellbot.config.json: ${missingConfig.join(", ")}`
-      );
-    }
-
-    const oauthConfig = requireOAuthConfig(config);
-    const oauthClient = new EbayOAuthClient({
-      clientId: oauthConfig.clientId,
-      clientSecret: oauthConfig.clientSecret,
-      redirectUri: oauthConfig.redirectUri,
-      scopes: config.ebayScopes,
-      environment: config.ebayEnv === "sandbox" ? "SANDBOX" : "PRODUCTION",
-      authBaseUrl: config.ebayAuthBaseUrl,
-      apiBaseUrl: config.ebayApiBaseUrl
-    });
+    const publishConfig = requirePublishConfiguration(config);
+    const oauthClient = createUserOAuthClient(config);
 
     const accessToken = await getValidUserAccessToken(config, oauthClient);
 
@@ -102,20 +76,14 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
     const inventoryClient = new EbayInventoryClient({ apiBaseUrl: config.ebayApiBaseUrl });
     const accountClient = new EbayAccountClient({ apiBaseUrl: config.ebayApiBaseUrl });
 
-    // Validazioni read-only immediate delle policy/location prima di creare offer.
-    await accountClient.getFulfillmentPolicy(accessToken, config.policies.fulfillmentPolicyId!);
-    await accountClient.getPaymentPolicy(accessToken, config.policies.paymentPolicyId!);
-    await accountClient.getReturnPolicy(accessToken, config.policies.returnPolicyId!);
-    await accountClient.getInventoryLocation(accessToken, config.merchantLocationKey!);
+    await validatePoliciesAndLocation(accountClient, accessToken, publishConfig);
 
-    const uploadedImageUrls: string[] = [];
-
-    for (const imageFile of ebayBuild.product.image_files) {
-      const absolutePath = path.isAbsolute(imageFile) ? imageFile : path.join(listing.dir, imageFile);
-      const imageUrl = await mediaClient.uploadImage(accessToken, absolutePath);
-      uploadedImageUrls.push(imageUrl);
-      logger.info(`Immagine caricata: ${path.basename(absolutePath)}`);
-    }
+    const uploadedImageUrls = await uploadListingImages(
+      mediaClient,
+      accessToken,
+      listing.dir,
+      ebayBuild.product.image_files
+    );
 
     await inventoryClient.upsertInventoryItem(
       accessToken,
@@ -145,12 +113,12 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
         format: ebayBuild.format,
         availableQuantity: ebayBuild.quantity,
         categoryId: ebayBuild.category_id,
-        merchantLocationKey: config.merchantLocationKey!,
+        merchantLocationKey: publishConfig.merchantLocationKey,
         listingDescription: ebayBuild.listing_description,
         listingPolicies: {
-          fulfillmentPolicyId: config.policies.fulfillmentPolicyId!,
-          paymentPolicyId: config.policies.paymentPolicyId!,
-          returnPolicyId: config.policies.returnPolicyId!
+          fulfillmentPolicyId: publishConfig.policies.fulfillmentPolicyId,
+          paymentPolicyId: publishConfig.policies.paymentPolicyId,
+          returnPolicyId: publishConfig.policies.returnPolicyId
         },
         listingDuration: ebayBuild.listing_duration,
         pricingSummary: ebayBuild.pricing_summary
@@ -176,7 +144,7 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
       }`
     );
   } catch (error) {
-    status.state = "error";
+    status.state = previouslyPublished ? "published" : "error";
     status.last_error = toStatusError(error);
     await writeStatus(listing.statusPath, status);
     throw error;

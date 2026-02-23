@@ -6,6 +6,7 @@ import { runAuth } from "./commands/auth.js";
 import { runBuild } from "./commands/build.js";
 import { runConfigTest } from "./commands/config-test.js";
 import { runPublish } from "./commands/publish.js";
+import { runRevise } from "./commands/revise.js";
 import { runScan } from "./commands/scan.js";
 
 const runCommand = async (fn: () => Promise<void>): Promise<void> => {
@@ -53,6 +54,13 @@ program
   .argument("<folder>", "slug o path della cartella listing")
   .option("-y, --yes", "salta conferma interattiva")
   .action(async (folder: string, options: { yes?: boolean }) => runCommand(() => runPublish(folder, options)));
+
+program
+  .command("revise")
+  .description("Aggiorna una listing già pubblicata (descrizione/foto/prezzo) via API")
+  .argument("<folder>", "slug o path della cartella listing")
+  .option("-y, --yes", "salta conferma interattiva")
+  .action(async (folder: string, options: { yes?: boolean }) => runCommand(() => runRevise(folder, options)));
 
 program
   .command("config:test")
