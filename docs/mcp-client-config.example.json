@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sellbot": {
+      "command": "node",
+      "args": [
+        "/Users/cristopher.turazza/Developer/mastrota/dist/mcp/server.js"
+      ],
+      "cwd": "/Users/cristopher.turazza/Developer/mastrota"
+    }
+  }
+}

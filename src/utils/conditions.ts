@@ -19,6 +19,10 @@ export const mapDraftConditionToInventoryCondition = (input: string): string => 
 
   const normalized = input.trim().toLowerCase();
 
+  if (normalized.includes("like new") || normalized.includes("come nuovo")) {
+    return "LIKE_NEW";
+  }
+
   if (normalized === "new" || normalized.includes("nuovo")) {
     return "NEW";
   }

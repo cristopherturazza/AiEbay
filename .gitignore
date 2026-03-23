@@ -69,6 +69,8 @@ web_modules/
 .env
 .env.*
 !.env.example
+!.env.sandbox.example
+!.env.prod.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -139,5 +141,7 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 # Sellbot local data
-sellbot.config.json
+sellbot.config*.json
+!sellbot.config.example.json
 .sellbot/
+ToSell/

@@ -1,20 +1,22 @@
+import { loadRuntimeConfig } from "../config.js";
 import { logger } from "../logger.js";
+import { generateListingEnrichment } from "../enrichment/index.js";
 import {
+  writeEnrichmentReport,
   getToSellRoot,
   listListingFolders,
   listPhotoFiles,
   readDraft,
-  readNotes,
   readStatusOrEmpty,
   writeDraft,
   writeStatus
 } from "../fs/listings.js";
-import { generateDraftFromNotes } from "../utils/draft-generator.js";
 import { makeSku } from "../utils/sku.js";
 import type { Draft } from "../types.js";
 
 export const runScan = async (): Promise<void> => {
-  const root = getToSellRoot();
+  const config = await loadRuntimeConfig();
+  const root = getToSellRoot(config.cwd);
   const listings = await listListingFolders(root);
 
   if (listings.length === 0) {
@@ -41,17 +43,12 @@ export const runScan = async (): Promise<void> => {
     }
 
     if (!draft && !draftReadError) {
-      const notes = await readNotes(listing.notesPath);
-      const generatedDraft = generateDraftFromNotes({
-        slug: listing.slug,
-        notes,
-        photoFiles: photos
-      });
-
-      await writeDraft(listing.draftPath, generatedDraft);
-      draft = generatedDraft;
+      const enrichment = await generateListingEnrichment(listing, { moduleId: "auto" });
+      await writeDraft(listing.draftPath, enrichment.draft);
+      await writeEnrichmentReport(listing.enrichmentPath, enrichment.report);
+      draft = enrichment.draft;
       createdDraftCount += 1;
-      logger.info(`[${listing.slug}] creato draft.json`);
+      logger.info(`[${listing.slug}] creato draft.json con modulo=${enrichment.moduleId}`);
     }
 
     const status = await readStatusOrEmpty(listing.statusPath);

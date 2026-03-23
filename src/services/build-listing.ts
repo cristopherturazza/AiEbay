@@ -1,18 +1,15 @@
 import path from "node:path";
 import { type RuntimeConfig } from "../config.js";
-import { SellbotError } from "../errors.js";
-import {
-  listPhotoFiles,
-  readDraft,
-  readEbayBuild,
-  writeEbayBuild,
-  type ListingPaths
-} from "../fs/listings.js";
+import { readEbayBuild, writeEbayBuild, type ListingPaths } from "../fs/listings.js";
 import { createAppOAuthClient } from "../ebay/oauth-client-factory.js";
 import { EbayTaxonomyClient } from "../ebay/taxonomy.js";
 import type { EbayBuild } from "../types.js";
 import { mapDraftConditionToInventoryCondition } from "../utils/conditions.js";
+import { renderEbayListingDescription } from "../utils/ebay-description.js";
+import { toRestMarketplaceId } from "../utils/marketplace.js";
 import { makeSku } from "../utils/sku.js";
+import { deriveDraftShippingProfile } from "../shipping/book-logistics.js";
+import { readListingDraftInputs } from "./listing-inputs.js";
 
 export interface BuildListingResult {
   listing: ListingPaths;
@@ -41,25 +38,9 @@ const relativeImageFiles = (photoFiles: string[]): string[] => {
   return photoFiles.map((fileName) => path.join("photos", fileName));
 };
 
-interface ListingDraftInputs {
-  draft: NonNullable<Awaited<ReturnType<typeof readDraft>>>;
-  photoFiles: string[];
-}
-
-const readListingDraftInputs = async (listing: ListingPaths): Promise<ListingDraftInputs> => {
-  const draft = await readDraft(listing.draftPath);
-
-  if (!draft) {
-    throw new SellbotError("DRAFT_MISSING", `draft.json mancante in ${listing.dir}`);
-  }
-
-  const photoFiles = await listPhotoFiles(listing.photosDir);
-
-  if (photoFiles.length === 0) {
-    throw new SellbotError("PHOTOS_MISSING", `Nessuna immagine .jpg/.jpeg/.png trovata in ${listing.photosDir}`);
-  }
-
-  return { draft, photoFiles };
+const normalizeShippingProfile = (value: string | undefined): string | undefined => {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 };
 
 const resolveCategoryId = async (
@@ -78,7 +59,11 @@ const resolveCategoryId = async (
 
   // Sandbox limitation documented by eBay: category suggestions may be less reliable.
   // https://developer.ebay.com/api-docs/commerce/taxonomy/resources/category_tree/methods/getCategorySuggestions
-  return taxonomyClient.resolveCategoryId(appToken.access_token, config.ebayMarketplaceId, categoryHint);
+  return taxonomyClient.resolveCategoryId(
+    appToken.access_token,
+    toRestMarketplaceId(config.ebayMarketplaceId),
+    categoryHint
+  );
 };
 
 export const buildListing = async (
@@ -95,7 +80,8 @@ export const buildListing = async (
     generated_at: new Date().toISOString(),
     slug: listing.slug,
     sku,
-    marketplace_id: config.ebayMarketplaceId,
+    shipping_profile: normalizeShippingProfile(deriveDraftShippingProfile(draft)),
+    marketplace_id: toRestMarketplaceId(config.ebayMarketplaceId),
     locale: config.locale,
     quantity: 1,
     format: "FIXED_PRICE",
@@ -108,7 +94,7 @@ export const buildListing = async (
         currency: draft.price.currency
       }
     },
-    listing_description: draft.description,
+    listing_description: renderEbayListingDescription(draft.description),
     product: {
       title: draft.title,
       description: draft.description,
@@ -149,7 +135,10 @@ export const syncListingBuildFromDraft = async (
     generated_at: new Date().toISOString(),
     slug: listing.slug,
     sku: existingBuild.sku || makeSku(listing.slug),
-    marketplace_id: existingBuild.marketplace_id || config.ebayMarketplaceId,
+    shipping_profile:
+      normalizeShippingProfile(deriveDraftShippingProfile(draft)) ??
+      normalizeShippingProfile(existingBuild.shipping_profile),
+    marketplace_id: toRestMarketplaceId(existingBuild.marketplace_id || config.ebayMarketplaceId),
     locale: existingBuild.locale || config.locale,
     quantity: existingBuild.quantity > 0 ? existingBuild.quantity : 1,
     format: "FIXED_PRICE",
@@ -162,7 +151,7 @@ export const syncListingBuildFromDraft = async (
         currency: draft.price.currency
       }
     },
-    listing_description: draft.description,
+    listing_description: renderEbayListingDescription(draft.description),
     product: {
       ...existingBuild.product,
       title: draft.title,

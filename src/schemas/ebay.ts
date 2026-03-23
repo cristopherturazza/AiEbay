@@ -5,6 +5,7 @@ export const ebayBuildSchema = z.object({
   generated_at: z.string().datetime(),
   slug: z.string().min(1),
   sku: z.string().min(1),
+  shipping_profile: z.string().min(1).optional(),
   marketplace_id: z.string().min(1),
   locale: z.string().min(2),
   quantity: z.number().int().positive(),

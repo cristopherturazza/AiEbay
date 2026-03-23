@@ -10,15 +10,33 @@ interface DefaultCategoryTreeResponse {
   categoryTreeId: string;
 }
 
-interface CategorySuggestion {
+export interface CategorySuggestion {
   category: {
     categoryId: string;
     categoryName?: string;
   };
+  categoryTreeNodeLevel?: number;
+  categoryTreeNodeAncestors?: Array<{
+    categoryId: string;
+    categoryName?: string;
+  }>;
 }
 
 interface CategorySuggestionsResponse {
   categorySuggestions: CategorySuggestion[];
+}
+
+interface ItemAspect {
+  localizedAspectName: string;
+  aspectConstraint?: {
+    aspectRequired?: boolean;
+    aspectMaxLength?: number;
+    itemToAspectCardinality?: string;
+  };
+}
+
+interface CategoryAspectsResponse {
+  aspects?: ItemAspect[];
 }
 
 export class EbayTaxonomyClient {
@@ -62,6 +80,26 @@ export class EbayTaxonomyClient {
     });
 
     return response.categorySuggestions ?? [];
+  }
+
+  // getItemAspectsForCategory (docs):
+  // https://developer.ebay.com/api-docs/commerce/taxonomy/resources/category_tree/methods/getItemAspectsForCategory
+  async getItemAspectsForCategory(
+    accessToken: string,
+    categoryTreeId: string,
+    categoryId: string
+  ): Promise<ItemAspect[]> {
+    const response = await this.httpClient.requestJson<CategoryAspectsResponse>({
+      method: "GET",
+      url: `${this.options.apiBaseUrl}/commerce/taxonomy/v1/category_tree/${encodeURIComponent(
+        categoryTreeId
+      )}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+
+    return response.aspects ?? [];
   }
 
   async resolveCategoryId(accessToken: string, marketplaceId: string, query: string): Promise<string> {

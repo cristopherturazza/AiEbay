@@ -20,8 +20,19 @@ const tokenFileSchema = z.object({
 
 export type TokenFile = z.infer<typeof tokenFileSchema>;
 
-export const tokenFilePath = (): string => {
-  return path.join(os.homedir(), ".sellbot", "ebay-token.json");
+const sanitizeFileToken = (value: string | undefined): string => {
+  const sanitized = value?.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return sanitized && sanitized.length > 0 ? sanitized : "default";
+};
+
+export const tokenFilePath = (config?: RuntimeConfig): string => {
+  if (!config) {
+    return path.join(os.homedir(), ".sellbot", "ebay-token.json");
+  }
+
+  const envToken = sanitizeFileToken(config.ebayEnv);
+  const clientToken = sanitizeFileToken(config.ebayClientId);
+  return path.join(os.homedir(), ".sellbot", `ebay-token.${envToken}.${clientToken}.json`);
 };
 
 const toTokenFile = (token: TokenResponse): TokenFile => {
@@ -55,17 +66,18 @@ const ensureSecureStorage = async (): Promise<void> => {
   }
 };
 
-export const saveToken = async (token: TokenResponse): Promise<TokenFile> => {
+export const saveToken = async (token: TokenResponse, config?: RuntimeConfig): Promise<TokenFile> => {
   await ensureSecureStorage();
   const stored = tokenFileSchema.parse(toTokenFile(token));
+  const filePath = tokenFilePath(config);
 
-  await writeFile(tokenFilePath(), `${JSON.stringify(stored, null, 2)}\n`, {
+  await writeFile(filePath, `${JSON.stringify(stored, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600
   });
 
   try {
-    await chmod(tokenFilePath(), 0o600);
+    await chmod(filePath, 0o600);
   } catch {
     // best effort
   }
@@ -73,9 +85,11 @@ export const saveToken = async (token: TokenResponse): Promise<TokenFile> => {
   return stored;
 };
 
-export const readToken = async (): Promise<TokenFile | null> => {
+export const readToken = async (config?: RuntimeConfig): Promise<TokenFile | null> => {
+  const filePath = tokenFilePath(config);
+
   try {
-    const raw = await readFile(tokenFilePath(), "utf8");
+    const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     return tokenFileSchema.parse(parsed);
   } catch (error) {
@@ -112,9 +126,9 @@ export const getValidUserAccessToken = async (
   config: RuntimeConfig,
   oauthClient: EbayOAuthClient
 ): Promise<string> => {
-  const token = await readToken();
+  const token = await readToken(config);
   if (!token) {
-    throw new SellbotError("TOKEN_MISSING", `Token non trovato: ${tokenFilePath()}. Esegui prima 'sellbot auth'.`);
+    throw new SellbotError("TOKEN_MISSING", `Token non trovato: ${tokenFilePath(config)}. Esegui prima 'sellbot auth'.`);
   }
 
   if (!tokenExpired(token)) {
@@ -134,7 +148,7 @@ export const getValidUserAccessToken = async (
     refreshed.refresh_token_expires_in = token.refresh_token_expires_in;
   }
 
-  const stored = await saveToken(refreshed);
+  const stored = await saveToken(refreshed, config);
   assertScopes(stored, config.ebayScopes);
 
   return stored.access_token;

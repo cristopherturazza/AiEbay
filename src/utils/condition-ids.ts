@@ -1,0 +1,12 @@
+export const conditionIdByInventoryEnum: Record<string, string> = {
+  NEW: "1000",
+  NEW_OTHER: "1500",
+  NEW_WITH_DEFECTS: "1750",
+  CERTIFIED_REFURBISHED: "2000",
+  SELLER_REFURBISHED: "2500",
+  LIKE_NEW: "2750",
+  USED_VERY_GOOD: "4000",
+  USED_GOOD: "5000",
+  USED_ACCEPTABLE: "6000",
+  FOR_PARTS_OR_NOT_WORKING: "7000"
+};

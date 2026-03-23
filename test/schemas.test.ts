@@ -7,6 +7,10 @@ describe("draftSchema", () => {
       title: "Nike Air Max 42",
       description: "Scarpe usate in buone condizioni",
       condition: "Used",
+      shipping: {
+        weight_g: 320,
+        thickness_cm: 2.1
+      },
       price: {
         target: 45,
         quick_sale: 39,
@@ -32,6 +36,25 @@ describe("draftSchema", () => {
         price: {
           target: 10,
           currency: "EURO"
+        },
+        category_hint: "test",
+        item_specifics: {}
+      })
+    ).toThrow();
+  });
+
+  it("rifiuta un draft con shipping.weight_g non positivo", () => {
+    expect(() =>
+      draftSchema.parse({
+        title: "Titolo",
+        description: "Descrizione",
+        condition: "Used",
+        shipping: {
+          weight_g: 0
+        },
+        price: {
+          target: 10,
+          currency: "EUR"
         },
         category_hint: "test",
         item_specifics: {}

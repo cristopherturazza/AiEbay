@@ -129,6 +129,7 @@ export class EbayInventoryClient {
       url: `${this.options.apiBaseUrl}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
         "Content-Language": locale,
         "Content-Type": "application/json"
       },
@@ -144,6 +145,7 @@ export class EbayInventoryClient {
       url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
         "Content-Language": locale,
         "Content-Type": "application/json"
       },
@@ -155,12 +157,14 @@ export class EbayInventoryClient {
 
   // publishOffer (docs):
   // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/publishOffer
-  async publishOffer(accessToken: string, offerId: string): Promise<PublishOfferResponse> {
+  async publishOffer(accessToken: string, offerId: string, locale: string): Promise<PublishOfferResponse> {
     return this.httpClient.requestJson<PublishOfferResponse>({
       method: "POST",
       url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
+        "Content-Language": locale,
         "Content-Type": "application/json"
       }
     });
@@ -168,12 +172,14 @@ export class EbayInventoryClient {
 
   // getOffer (docs):
   // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/getOffer
-  async getOffer(accessToken: string, offerId: string): Promise<OfferResponse> {
+  async getOffer(accessToken: string, offerId: string, locale: string): Promise<OfferResponse> {
     return this.httpClient.requestJson<OfferResponse>({
       method: "GET",
       url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
       headers: {
-        Authorization: `Bearer ${accessToken}`
+        Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
+        "Content-Language": locale
       }
     });
   }
@@ -191,6 +197,7 @@ export class EbayInventoryClient {
       url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
         "Content-Language": locale,
         "Content-Type": "application/json"
       },

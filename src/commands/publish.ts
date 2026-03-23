@@ -1,33 +1,68 @@
 import { loadRuntimeConfig, requirePublishConfiguration } from "../config.js";
-import { SellbotError } from "../errors.js";
-import { EbayAccountClient } from "../ebay/account.js";
-import { EbayInventoryClient } from "../ebay/inventory.js";
-import { EbayMediaClient } from "../ebay/media.js";
-import { createUserOAuthClient } from "../ebay/oauth-client-factory.js";
+import { EbayApiError } from "../ebay/http.js";
+import {
+  type CreateOfferPayload,
+  type UpdateOfferPayload
+} from "../ebay/inventory.js";
 import {
   getToSellRoot,
-  listPhotoFiles,
-  readDraft,
   readStatusOrEmpty,
   resolveListing,
   writeStatus
 } from "../fs/listings.js";
 import { logger } from "../logger.js";
 import { syncListingBuildFromDraft } from "../services/build-listing.js";
-import { uploadListingImages, validatePoliciesAndLocation } from "../services/publish-helpers.js";
-import { getValidUserAccessToken } from "../token/token-store.js";
+import { readListingDraftInputs } from "../services/listing-inputs.js";
+import { hasPublishedListing, persistListingFailure } from "../services/listing-status.js";
+import { syncInventoryItemFromBuild, validatePoliciesAndLocation } from "../services/publish-helpers.js";
+import { buildListingReviewSummary, createSellApiRuntime, logFulfillmentResolution } from "../services/sell-workflow.js";
 import { confirm } from "../utils/confirm.js";
-import { toStatusError } from "../utils/status-error.js";
+import { deriveListingUrl } from "../utils/listing-url.js";
+import { deriveDraftShippingProfile } from "../shipping/book-logistics.js";
 
 interface PublishOptions {
   yes?: boolean;
 }
 
-const descriptionPreview = (description: string): string => {
-  return description
-    .split(/\r?\n/)
-    .slice(0, 3)
-    .join("\n");
+interface EbayErrorParameter {
+  name?: string;
+  value?: string;
+}
+
+interface EbayErrorEntry {
+  errorId?: number;
+  parameters?: EbayErrorParameter[];
+}
+
+interface EbayErrorResponse {
+  errors?: EbayErrorEntry[];
+}
+
+const getDuplicateOfferId = (error: unknown): string | null => {
+  if (!(error instanceof EbayApiError)) {
+    return null;
+  }
+
+  let parsed: EbayErrorResponse;
+  try {
+    parsed = JSON.parse(error.responseSnippet) as EbayErrorResponse;
+  } catch {
+    return null;
+  }
+
+  for (const entry of parsed.errors ?? []) {
+    if (entry.errorId !== 25002) {
+      continue;
+    }
+
+    for (const parameter of entry.parameters ?? []) {
+      if (parameter.name === "offerId" && parameter.value) {
+        return parameter.value;
+      }
+    }
+  }
+
+  return null;
 };
 
 export const runPublish = async (folder: string, options: PublishOptions): Promise<void> => {
@@ -35,25 +70,18 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
   const listing = await resolveListing(getToSellRoot(config.cwd), folder);
 
   const status = await readStatusOrEmpty(listing.statusPath);
-  const previouslyPublished = status.state === "published" || Boolean(status.ebay.listing_id);
+  const previouslyPublished = hasPublishedListing(status);
 
   try {
-    const draft = await readDraft(listing.draftPath);
-    if (!draft) {
-      throw new SellbotError("DRAFT_MISSING", `draft.json mancante in ${listing.dir}`);
-    }
+    const { draft, photoFiles } = await readListingDraftInputs(listing);
 
-    const photoFiles = await listPhotoFiles(listing.photosDir);
-    if (photoFiles.length === 0) {
-      throw new SellbotError("PHOTOS_MISSING", `Nessuna immagine trovata in ${listing.photosDir}`);
-    }
-
-    const summary = [
-      `Titolo: ${draft.title}`,
-      `Prezzo target: ${draft.price.target.toFixed(2)} ${draft.price.currency}`,
-      `Foto: ${photoFiles.length}`,
-      `Descrizione (prime 3 righe):\n${descriptionPreview(draft.description)}`
-    ].join("\n");
+    const resolvedShippingProfile = deriveDraftShippingProfile(draft);
+    const summary = buildListingReviewSummary(config, {
+      draft,
+      photoCount: photoFiles.length,
+      resolvedShippingProfile,
+      priceLabel: "Prezzo target"
+    });
 
     logger.info(`Riepilogo pubblicazione per '${listing.slug}':\n${summary}`);
 
@@ -67,74 +95,67 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
 
     const { ebayBuild } = await syncListingBuildFromDraft(listing, config);
 
-    const publishConfig = requirePublishConfiguration(config);
-    const oauthClient = createUserOAuthClient(config);
+    const publishConfig = requirePublishConfiguration(config, {
+      fulfillmentProfile: ebayBuild.shipping_profile
+    });
+    const runtime = await createSellApiRuntime(config);
+    await validatePoliciesAndLocation(runtime.accountClient, runtime.accessToken, publishConfig);
+    logFulfillmentResolution(listing.slug, publishConfig);
 
-    const accessToken = await getValidUserAccessToken(config, oauthClient);
+    await syncInventoryItemFromBuild({
+      inventoryClient: runtime.inventoryClient,
+      mediaClient: runtime.mediaClient,
+      accessToken: runtime.accessToken,
+      listingDir: listing.dir,
+      ebayBuild
+    });
 
-    const mediaClient = new EbayMediaClient({ mediaBaseUrl: config.ebayMediaBaseUrl });
-    const inventoryClient = new EbayInventoryClient({ apiBaseUrl: config.ebayApiBaseUrl });
-    const accountClient = new EbayAccountClient({ apiBaseUrl: config.ebayApiBaseUrl });
-
-    await validatePoliciesAndLocation(accountClient, accessToken, publishConfig);
-
-    const uploadedImageUrls = await uploadListingImages(
-      mediaClient,
-      accessToken,
-      listing.dir,
-      ebayBuild.product.image_files
-    );
-
-    await inventoryClient.upsertInventoryItem(
-      accessToken,
-      ebayBuild.sku,
-      {
-        availability: {
-          shipToLocationAvailability: {
-            quantity: ebayBuild.quantity
-          }
-        },
-        condition: ebayBuild.condition,
-        product: {
-          title: ebayBuild.product.title,
-          description: ebayBuild.product.description,
-          imageUrls: uploadedImageUrls,
-          aspects: ebayBuild.product.aspects
-        }
+    const offerPayload: CreateOfferPayload = {
+      sku: ebayBuild.sku,
+      marketplaceId: ebayBuild.marketplace_id,
+      format: ebayBuild.format,
+      availableQuantity: ebayBuild.quantity,
+      categoryId: ebayBuild.category_id,
+      merchantLocationKey: publishConfig.merchantLocationKey,
+      listingDescription: ebayBuild.listing_description,
+      listingPolicies: {
+        fulfillmentPolicyId: publishConfig.policies.fulfillmentPolicyId,
+        paymentPolicyId: publishConfig.policies.paymentPolicyId,
+        returnPolicyId: publishConfig.policies.returnPolicyId
       },
-      ebayBuild.locale
-    );
+      listingDuration: ebayBuild.listing_duration,
+      pricingSummary: ebayBuild.pricing_summary
+    };
 
-    const offerId = await inventoryClient.createOffer(
-      accessToken,
-      {
-        sku: ebayBuild.sku,
-        marketplaceId: ebayBuild.marketplace_id,
-        format: ebayBuild.format,
-        availableQuantity: ebayBuild.quantity,
-        categoryId: ebayBuild.category_id,
-        merchantLocationKey: publishConfig.merchantLocationKey,
-        listingDescription: ebayBuild.listing_description,
-        listingPolicies: {
-          fulfillmentPolicyId: publishConfig.policies.fulfillmentPolicyId,
-          paymentPolicyId: publishConfig.policies.paymentPolicyId,
-          returnPolicyId: publishConfig.policies.returnPolicyId
-        },
-        listingDuration: ebayBuild.listing_duration,
-        pricingSummary: ebayBuild.pricing_summary
-      },
-      ebayBuild.locale
-    );
+    const updateOfferPayload: UpdateOfferPayload = offerPayload;
 
-    const published = await inventoryClient.publishOffer(accessToken, offerId);
+    let offerId: string;
+    try {
+      offerId = await runtime.inventoryClient.createOffer(runtime.accessToken, offerPayload, ebayBuild.locale);
+    } catch (error) {
+      const duplicateOfferId = getDuplicateOfferId(error);
+      if (!duplicateOfferId) {
+        throw error;
+      }
+
+      offerId = duplicateOfferId;
+      logger.warn(`[${listing.slug}] Offerta gia' esistente, riuso offer_id=${offerId}`);
+      await runtime.inventoryClient.updateOffer(runtime.accessToken, offerId, updateOfferPayload, ebayBuild.locale);
+      logger.info(`[${listing.slug}] Offerta esistente riallineata ai dati correnti`);
+    }
+
+    status.ebay.offer_id = offerId;
+
+    const published = await runtime.inventoryClient.publishOffer(runtime.accessToken, offerId, ebayBuild.locale);
 
     status.state = "published";
     status.published_at = new Date().toISOString();
     status.last_error = null;
     status.ebay.sku = ebayBuild.sku;
-    status.ebay.offer_id = offerId;
     status.ebay.listing_id = published.listingId ?? null;
-    status.ebay.url = null;
+    status.ebay.url = published.listingId
+      ? deriveListingUrl(config.ebayEnv, ebayBuild.marketplace_id, published.listingId)
+      : null;
 
     await writeStatus(listing.statusPath, status);
 
@@ -144,9 +165,7 @@ export const runPublish = async (folder: string, options: PublishOptions): Promi
       }`
     );
   } catch (error) {
-    status.state = previouslyPublished ? "published" : "error";
-    status.last_error = toStatusError(error);
-    await writeStatus(listing.statusPath, status);
+    await persistListingFailure(listing.statusPath, status, previouslyPublished, error);
     throw error;
   }
 };

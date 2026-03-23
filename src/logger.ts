@@ -1,13 +1,17 @@
 const stamp = () => new Date().toISOString();
 
+const writeStderr = (level: "INFO" | "WARN" | "ERROR", message: string): void => {
+  process.stderr.write(`[${level} ${stamp()}] ${message}\n`);
+};
+
 export const logger = {
   info(message: string): void {
-    console.log(`[INFO ${stamp()}] ${message}`);
+    writeStderr("INFO", message);
   },
   warn(message: string): void {
-    console.warn(`[WARN ${stamp()}] ${message}`);
+    writeStderr("WARN", message);
   },
   error(message: string): void {
-    console.error(`[ERROR ${stamp()}] ${message}`);
+    writeStderr("ERROR", message);
   }
 };

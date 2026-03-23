@@ -15,7 +15,7 @@ export const createUserOAuthClient = (config: RuntimeConfig): EbayOAuthClient =>
   return new EbayOAuthClient({
     clientId: oauthConfig.clientId,
     clientSecret: oauthConfig.clientSecret,
-    redirectUri: oauthConfig.redirectUri,
+    redirectUri: oauthConfig.runame,
     scopes: config.ebayScopes,
     environment: toOauthEnvironment(config.ebayEnv)
   });

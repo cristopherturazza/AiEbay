@@ -1,9 +1,43 @@
 {
-  "marketplaceId": "eBay_IT",
+  "marketplaceId": "EBAY_IT",
   "locale": "it-IT",
   "merchantLocationKey": "MILANO_WAREHOUSE",
+  "shippingProfiles": {
+    "book": {
+      "label": "Libro standard Italia",
+      "carrierCode": "POST_ITALIANO",
+      "serviceCode": "IT_Posta1",
+      "pricingMode": "separate_charge",
+      "buyerCharge": {
+        "value": 4.9,
+        "currency": "EUR"
+      },
+      "estimatedCarrierCost": {
+        "value": 4.9,
+        "currency": "EUR"
+      }
+    },
+    "book_heavy": {
+      "label": "Libro pesante / spesso",
+      "carrierCode": "POST_ITALIANO",
+      "serviceCode": "IT_Posta1ExtraStandard",
+      "pricingMode": "separate_charge",
+      "buyerCharge": {
+        "value": 5.9,
+        "currency": "EUR"
+      },
+      "estimatedCarrierCost": {
+        "value": 5.9,
+        "currency": "EUR"
+      }
+    }
+  },
   "policies": {
     "fulfillmentPolicyId": "6200000000",
+    "fulfillmentPolicyIdByProfile": {
+      "book": "6200000001",
+      "book_heavy": "6200000003"
+    },
     "paymentPolicyId": "6300000000",
     "returnPolicyId": "6400000000"
   }

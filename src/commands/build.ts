@@ -1,14 +1,14 @@
 import { loadRuntimeConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { buildListing } from "../services/build-listing.js";
+import { hasPublishedListing, persistListingFailure } from "../services/listing-status.js";
 import { getToSellRoot, readStatusOrEmpty, resolveListing, writeStatus } from "../fs/listings.js";
-import { toStatusError } from "../utils/status-error.js";
 
 export const runBuild = async (folder: string): Promise<void> => {
   const config = await loadRuntimeConfig();
   const listing = await resolveListing(getToSellRoot(config.cwd), folder);
   const status = await readStatusOrEmpty(listing.statusPath);
-  const previouslyPublished = status.state === "published" || Boolean(status.ebay.listing_id);
+  const previouslyPublished = hasPublishedListing(status);
 
   try {
     const result = await buildListing(listing, config);
@@ -25,10 +25,7 @@ export const runBuild = async (folder: string): Promise<void> => {
       `[${listing.slug}] category_id=${result.ebayBuild.category_id}, prezzo=${result.ebayBuild.pricing_summary.price.value} ${result.ebayBuild.pricing_summary.price.currency}`
     );
   } catch (error) {
-    status.state = previouslyPublished ? "published" : "error";
-    status.last_error = toStatusError(error);
-    await writeStatus(listing.statusPath, status);
-
+    await persistListingFailure(listing.statusPath, status, previouslyPublished, error);
     throw error;
   }
 };

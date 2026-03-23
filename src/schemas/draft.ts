@@ -7,10 +7,19 @@ export const priceSchema = z.object({
   currency: z.string().regex(/^[A-Z]{3}$/)
 });
 
+export const shippingSchema = z.object({
+  weight_g: z.number().positive().max(30000).optional(),
+  thickness_cm: z.number().positive().max(100).optional(),
+  pages: z.number().int().positive().max(10000).optional(),
+  binding: z.enum(["paperback", "hardcover"]).optional()
+});
+
 export const draftSchema = z
   .object({
     title: z.string().min(1),
     description: z.string().min(1),
+    shipping_profile: z.string().min(1).optional(),
+    shipping: shippingSchema.optional(),
     condition: z.string().min(1),
     price: priceSchema,
     category_hint: z.string().min(1),

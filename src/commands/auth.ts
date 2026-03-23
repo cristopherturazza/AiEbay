@@ -1,42 +1,75 @@
 import { createServer } from "node:http";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { URL } from "node:url";
 import { loadRuntimeConfig, requireOAuthConfig } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { logger } from "../logger.js";
-import { createUserOAuthClient } from "../ebay/oauth-client-factory.js";
-import { saveToken } from "../token/token-store.js";
+import { completeUserAuth, startUserAuth } from "../services/auth-flow.js";
+import { tokenFilePath } from "../token/token-store.js";
 import { openInBrowser } from "../utils/browser.js";
 
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
-const assertLocalRedirectUri = (redirectUri: string): URL => {
-  const parsed = new URL(redirectUri);
-  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-
-  if (!localHosts.has(parsed.hostname)) {
+const parseCallbackUrl = (callbackUrl: string): URL => {
+  try {
+    return new URL(callbackUrl);
+  } catch (error) {
     throw new SellbotError(
-      "REDIRECT_NOT_LOCAL",
-      `EBAY_REDIRECT_URI deve puntare a localhost per il callback locale. Valore ricevuto: ${redirectUri}`
+      "CALLBACK_URL_INVALID",
+      `EBAY_CALLBACK_URL non valido: ${(error as Error).message}`
+    );
+  }
+};
+
+const canUseLocalHttpCallback = (callbackUrl: URL): boolean => {
+  return callbackUrl.protocol === "http:" && LOCAL_HOSTS.has(callbackUrl.hostname);
+};
+
+const openConsentUrl = async (consentUrl: string): Promise<void> => {
+  logger.info(`Apri questo URL per autorizzare sellbot: ${consentUrl}`);
+
+  try {
+    await openInBrowser(consentUrl);
+    logger.info("Browser aperto sulla pagina di autorizzazione eBay");
+  } catch (error) {
+    logger.warn(
+      `Impossibile aprire il browser automaticamente: ${(error as Error).message}. Apri manualmente: ${consentUrl}`
+    );
+  }
+};
+
+const readAuthorizationCodeManually = async (state: string): Promise<string> => {
+  if (!input.isTTY) {
+    throw new SellbotError(
+      "OAUTH_CODE_MISSING",
+      "Callback OAuth automatico non disponibile e stdin non interattivo"
     );
   }
 
-  return parsed;
+  const rl = createInterface({ input, output });
+  try {
+    const answer = await rl.question(
+      "Incolla l'URL finale di redirect (oppure solo il valore del parametro code): "
+    );
+    void state;
+    return answer.trim();
+  } finally {
+    rl.close();
+  }
 };
 
-export const runAuth = async (): Promise<void> => {
-  const config = await loadRuntimeConfig();
-  const oauthConfig = requireOAuthConfig(config);
-  const redirectUrl = assertLocalRedirectUri(oauthConfig.redirectUri);
+const waitForLocalCallbackCode = async (
+  consentUrl: string,
+  state: string,
+  callbackUrl: URL,
+  fallbackPort: number
+): Promise<string> => {
+  const listenPort = callbackUrl.port ? Number.parseInt(callbackUrl.port, 10) : fallbackPort;
+  const callbackPath = callbackUrl.pathname || "/";
 
-  const oauthClient = createUserOAuthClient(config);
-
-  const state = oauthClient.createState();
-  const consentUrl = oauthClient.createConsentUrl(state);
-
-  const listenPort = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : config.sellbotPort;
-  const callbackPath = redirectUrl.pathname || "/";
-
-  const code = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     let timeoutId: NodeJS.Timeout;
     let settled = false;
     const finish = (handler: () => void): void => {
@@ -57,13 +90,15 @@ export const runAuth = async (): Promise<void> => {
         return;
       }
 
-      const error = requestUrl.searchParams.get("error");
+      const oauthError = requestUrl.searchParams.get("error");
       const errorDescription = requestUrl.searchParams.get("error_description");
-      if (error) {
+      if (oauthError) {
         res.statusCode = 400;
-        res.end(`OAuth error: ${error}`);
+        res.end(`OAuth error: ${oauthError}`);
         server.close();
-        finish(() => reject(new SellbotError("OAUTH_DENIED", `${error}: ${errorDescription ?? "nessun dettaglio"}`)));
+        finish(() =>
+          reject(new SellbotError("OAUTH_DENIED", `${oauthError}: ${errorDescription ?? "nessun dettaglio"}`))
+        );
         return;
       }
 
@@ -92,17 +127,9 @@ export const runAuth = async (): Promise<void> => {
       finish(() => resolve(receivedCode));
     });
 
-    server.listen(listenPort, redirectUrl.hostname, async () => {
-      logger.info(`Server callback attivo su ${redirectUrl.hostname}:${listenPort}${callbackPath}`);
-
-      try {
-        await openInBrowser(consentUrl);
-        logger.info("Browser aperto sulla pagina di autorizzazione eBay");
-      } catch (error) {
-        logger.warn(
-          `Impossibile aprire il browser automaticamente: ${(error as Error).message}. Apri manualmente: ${consentUrl}`
-        );
-      }
+    server.listen(listenPort, callbackUrl.hostname, async () => {
+      logger.info(`Server callback attivo su ${callbackUrl.hostname}:${listenPort}${callbackPath}`);
+      await openConsentUrl(consentUrl);
     });
 
     timeoutId = setTimeout(() => {
@@ -110,9 +137,31 @@ export const runAuth = async (): Promise<void> => {
       finish(() => reject(new SellbotError("OAUTH_TIMEOUT", "Timeout callback OAuth (5 minuti)")));
     }, CALLBACK_TIMEOUT_MS);
   });
+};
 
-  const token = await oauthClient.exchangeAuthorizationCode(code);
-  await saveToken(token);
+export const runAuth = async (): Promise<void> => {
+  const config = await loadRuntimeConfig();
+  const oauthConfig = requireOAuthConfig(config);
+  const { state, consentUrl } = await startUserAuth(config);
+  const parsedCallback = oauthConfig.callbackUrl ? parseCallbackUrl(oauthConfig.callbackUrl) : undefined;
 
-  logger.info("Autenticazione completata: token salvato in ~/.sellbot/ebay-token.json");
+  const code =
+    parsedCallback && canUseLocalHttpCallback(parsedCallback)
+      ? await waitForLocalCallbackCode(consentUrl, state, parsedCallback, config.sellbotPort)
+      : await (async (): Promise<string> => {
+          if (parsedCallback) {
+            logger.warn(
+              `EBAY_CALLBACK_URL=${parsedCallback.toString()} non e' un callback locale HTTP. Uso acquisizione manuale del code.`
+            );
+          } else {
+            logger.info("EBAY_CALLBACK_URL non configurato: uso acquisizione manuale del code.");
+          }
+
+          await openConsentUrl(consentUrl);
+          logger.info("Dopo il login eBay, copia l'URL finale di redirect e incollalo nel terminale.");
+          return readAuthorizationCodeManually(state);
+        })();
+
+  await completeUserAuth(config, code);
+  logger.info(`Autenticazione completata: token salvato in ${tokenFilePath(config)}`);
 };

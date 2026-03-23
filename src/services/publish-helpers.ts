@@ -1,8 +1,10 @@
 import path from "node:path";
 import type { PublishConfiguration } from "../config.js";
 import { EbayAccountClient } from "../ebay/account.js";
+import { EbayInventoryClient } from "../ebay/inventory.js";
 import { EbayMediaClient } from "../ebay/media.js";
 import { logger } from "../logger.js";
+import type { EbayBuild } from "../types.js";
 
 export const validatePoliciesAndLocation = async (
   accountClient: EbayAccountClient,
@@ -16,7 +18,7 @@ export const validatePoliciesAndLocation = async (
   await accountClient.getInventoryLocation(accessToken, publishConfig.merchantLocationKey);
 };
 
-export const uploadListingImages = async (
+const uploadListingImages = async (
   mediaClient: EbayMediaClient,
   accessToken: string,
   listingDir: string,
@@ -30,6 +32,47 @@ export const uploadListingImages = async (
     uploadedImageUrls.push(imageUrl);
     logger.info(`Immagine caricata: ${path.basename(absolutePath)}`);
   }
+
+  return uploadedImageUrls;
+};
+
+interface SyncInventoryItemFromBuildOptions {
+  inventoryClient: EbayInventoryClient;
+  mediaClient: EbayMediaClient;
+  accessToken: string;
+  listingDir: string;
+  ebayBuild: EbayBuild;
+}
+
+export const syncInventoryItemFromBuild = async (
+  options: SyncInventoryItemFromBuildOptions
+): Promise<string[]> => {
+  const uploadedImageUrls = await uploadListingImages(
+    options.mediaClient,
+    options.accessToken,
+    options.listingDir,
+    options.ebayBuild.product.image_files
+  );
+
+  await options.inventoryClient.upsertInventoryItem(
+    options.accessToken,
+    options.ebayBuild.sku,
+    {
+      availability: {
+        shipToLocationAvailability: {
+          quantity: options.ebayBuild.quantity
+        }
+      },
+      condition: options.ebayBuild.condition,
+      product: {
+        title: options.ebayBuild.product.title,
+        description: options.ebayBuild.product.description,
+        imageUrls: uploadedImageUrls,
+        aspects: options.ebayBuild.product.aspects
+      }
+    },
+    options.ebayBuild.locale
+  );
 
   return uploadedImageUrls;
 };
