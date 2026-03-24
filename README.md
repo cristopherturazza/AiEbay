@@ -69,18 +69,27 @@ Variabili principali:
 - `EBAY_CLIENT_ID`
 - `EBAY_CLIENT_SECRET`
 - `EBAY_RUNAME` (Redirect URI name creato nel Developer Portal, non un URL)
-- `EBAY_CALLBACK_URL` (opzionale, usato solo per callback automatico locale)
+- `EBAY_CALLBACK_URL` (opzionale ma raccomandato in production: URL pubblico del callback gestito da `mastrota`, es. `https://sellbot.example.com/auth/ebay/callback`)
 - `EBAY_SCOPES` (scope necessari)
 - `EBAY_MARKETPLACE_ID` (default `EBAY_IT`)
 - `SELLBOT_CONFIG_FILE` (opzionale, path del file config da usare al posto di `sellbot.config.json`)
-- `SELLBOT_PORT` (fallback porta callback)
+- `SELLBOT_PORT` (porta locale del server MCP HTTP e fallback per callback localhost)
 
 Note pratiche OAuth:
 
 - `redirect_uri` inviato a eBay e' il `RuName`
+- il `RuName` configurato nel portale eBay deve puntare allo stesso URL pubblico indicato in `EBAY_CALLBACK_URL`
 - molti account eBay richiedono URL `https` nei campi accepted/declined del RuName
-- se lasci vuoto `EBAY_CALLBACK_URL`, `sellbot auth` usa inserimento manuale del `code`
+- se `EBAY_CALLBACK_URL` e' configurato e `sellbot mcp:http` e' in esecuzione, il callback HTTP salva il token senza copy-paste manuale
+- se lasci vuoto `EBAY_CALLBACK_URL`, resta disponibile il fallback legacy con inserimento manuale del `code`
 - per separare sandbox/prod e ridurre errori operativi, usa sia file env distinti (`.env.sandbox`, `.env.prod`) sia file config distinti (`SELLBOT_CONFIG_FILE`)
+
+Dietro reverse proxy:
+
+- inoltra verso il container il path di callback esattamente com'e', ad esempio `/auth/ebay/callback`
+- preserva sempre la query string originale (`code`, `state`, `error`, `error_description`)
+- `mastrota` usa `EBAY_CALLBACK_URL` come sorgente di verita' per sapere quale path trattare come callback pubblico
+- `mcp:http` deve restare raggiungibile su `/mcp` e `/healthz`; non riusare quei path per il callback OAuth
 
 Scope consigliati per questa versione:
 
@@ -237,6 +246,7 @@ Endpoint:
 
 - MCP: `http://127.0.0.1:3000/mcp`
 - health: `http://127.0.0.1:3000/healthz`
+- callback eBay: path derivato da `EBAY_CALLBACK_URL`, ad esempio `/auth/ebay/callback`
 
 Il server MCP espone tool per:
 
@@ -252,8 +262,9 @@ Nota importante:
 - per OAuth il flusso corretto e':
   1. `sellbot_auth_start`
   2. apri il `consentUrl`
-  3. copia l'URL finale di redirect
-  4. `sellbot_auth_complete`
+  3. se `EBAY_CALLBACK_URL` e' configurato, attendi che eBay richiami il callback HTTP di `mastrota`
+  4. verifica con `sellbot_auth_status` che lo stato sia `authenticated`
+  5. solo fallback legacy/debug: usa `sellbot_auth_complete` con `redirect_url` oppure `code`
 - `sellbot_listings_list` usa di default `scope=current_env`, quindi in `prod` non mostra le listing sandbox gia' pubblicate salvo richiesta esplicita
 - `sellbot_remote_listings_list` interroga davvero eBay sull'env attivo; per la produzione usare `EBAY_ENV=prod`
 - `sellbot_remote_listings_list` usa Inventory API: vede le offer inventory-backed dell'account, non le listing legacy create fuori da Inventory API
@@ -277,8 +288,19 @@ Il token **non** viene salvato nel repository.
 
 Modalita':
 
-- callback automatico: `EBAY_CALLBACK_URL=http://localhost:3000/callback`
+- callback automatico consigliato per production/agenti: `EBAY_CALLBACK_URL=https://sellbot.example.com/auth/ebay/callback`
+- callback automatico locale: `EBAY_CALLBACK_URL=http://localhost:3000/auth/ebay/callback`
 - fallback manuale: incolla URL finale/code nel terminale
+
+Flusso consigliato in production:
+
+1. configura in eBay il `RuName` con redirect verso l'URL pubblico finale
+2. imposta lo stesso URL in `EBAY_CALLBACK_URL`
+3. avvia `sellbot mcp:http`
+4. chiama `sellbot_auth_start` via MCP HTTP
+5. apri il `consentUrl` nel browser
+6. lascia che il browser venga rediretto sul callback pubblico di `mastrota`
+7. usa `sellbot_auth_status` per vedere la transizione `not_authenticated` -> `pending_user_consent` -> `authenticated`
 
 ### `sellbot notifications:serve`
 

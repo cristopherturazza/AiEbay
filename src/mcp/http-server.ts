@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { loadRuntimeConfig } from "../config.js";
 import { logger } from "../logger.js";
+import { getConfiguredAuthCallbackPath, handleUserAuthCallback } from "../services/auth-flow.js";
 import { createSellbotMcpServer } from "./server.js";
 
 const MCP_PATH = "/mcp";
@@ -32,6 +33,14 @@ export interface RunningMcpHttpServer {
   close: () => Promise<void>;
 }
 
+const normalizePathname = (pathname: string): string => {
+  if (!pathname || pathname === "/") {
+    return "/";
+  }
+
+  return pathname.endsWith("/") ? pathname.slice(0, -1) || "/" : pathname;
+};
+
 const setCommonHeaders = (res: ServerResponse): void => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Last-Event-ID");
@@ -50,6 +59,14 @@ const sendJson = (res: ServerResponse, statusCode: number, payload: unknown): vo
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
+};
+
+const sendHtml = (res: ServerResponse, statusCode: number, body: string): void => {
+  setCommonHeaders(res);
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(body);
 };
 
 const sendJsonRpcError = (res: ServerResponse, statusCode: number, message: string): void => {
@@ -154,6 +171,53 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
   const host = options.host?.trim() || "127.0.0.1";
   const port = options.port ?? config.sellbotPort;
   const sessions = new Map<string, SessionEntry>();
+  const authCallbackPath = getConfiguredAuthCallbackPath(config);
+
+  const renderAuthCallbackPage = (state: Awaited<ReturnType<typeof handleUserAuthCallback>>["responseState"]): string => {
+    const byState: Record<
+      Awaited<ReturnType<typeof handleUserAuthCallback>>["responseState"],
+      { title: string; body: string }
+    > = {
+      authenticated: {
+        title: "Autorizzazione completata",
+        body: "Il token eBay e' stato salvato. Puoi chiudere questa finestra."
+      },
+      already_authenticated: {
+        title: "Autorizzazione gia' completata",
+        body: "La sessione risulta gia' conclusa. Puoi chiudere questa finestra."
+      },
+      invalid_state: {
+        title: "Richiesta non valida",
+        body: "Lo state OAuth non corrisponde alla sessione attiva."
+      },
+      expired: {
+        title: "Sessione scaduta",
+        body: "La sessione OAuth e' scaduta. Riavvia il flusso dal client."
+      },
+      error: {
+        title: "Autorizzazione non completata",
+        body: "Il callback eBay e' stato ricevuto ma l'autenticazione non si e' completata."
+      },
+      not_found: {
+        title: "Sessione non trovata",
+        body: "Non esiste una sessione OAuth attiva per questo callback."
+      }
+    };
+
+    const content = byState[state];
+    return `<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${content.title}</title>
+  </head>
+  <body>
+    <h2>${content.title}</h2>
+    <p>${content.body}</p>
+  </body>
+</html>`;
+  };
 
   const httpServer = createServer(async (req, res) => {
     setCommonHeaders(res);
@@ -178,6 +242,27 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
         env: config.ebayEnv,
         active_sessions: sessions.size
       });
+      return;
+    }
+
+    if (req.method === "GET" && authCallbackPath && normalizePathname(requestUrl.pathname) === authCallbackPath) {
+      const result = await handleUserAuthCallback(config, requestUrl);
+
+      if (result.responseState === "authenticated" || result.responseState === "already_authenticated") {
+        logger.info(
+          `OAuth callback eBay completato via HTTP${result.authSessionId ? ` session=${result.authSessionId}` : ""}`
+        );
+      } else if (result.responseState === "invalid_state") {
+        logger.warn("OAuth callback eBay ricevuto con state non valido");
+      } else {
+        logger.warn(
+          `OAuth callback eBay non completato (${result.responseState})${
+            result.authSessionId ? ` session=${result.authSessionId}` : ""
+          }`
+        );
+      }
+
+      sendHtml(res, result.httpStatus, renderAuthCallbackPage(result.responseState));
       return;
     }
 

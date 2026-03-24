@@ -116,7 +116,13 @@ export const createSellbotMcpServer = (): McpServer => {
     async () =>
       withTool(async () => {
         const config = await loadRuntimeConfig();
-        return okResult(await startUserAuth(config), "Apri consentUrl e poi chiama sellbot_auth_complete");
+        const result = await startUserAuth(config);
+        return okResult(
+          result,
+          result.callbackMode === "automatic_http"
+            ? "Apri consentUrl e poi monitora sellbot_auth_status: il callback HTTP salvera' il token automaticamente"
+            : "Apri consentUrl e poi chiama sellbot_auth_complete con redirect_url o code"
+        );
       })
   );
 

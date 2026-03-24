@@ -15,7 +15,10 @@ const tokenFileSchema = z.object({
   refresh_token_expires_in: z.number().int().positive().optional(),
   refresh_token_expires_at: z.string().datetime().optional(),
   scope: z.string().optional(),
-  obtained_at: z.string().datetime()
+  obtained_at: z.string().datetime(),
+  last_refresh_attempt_at: z.string().datetime().optional(),
+  last_refresh_error_code: z.string().min(1).optional(),
+  last_refresh_error_message: z.string().min(1).optional()
 });
 
 export type TokenFile = z.infer<typeof tokenFileSchema>;
@@ -66,12 +69,10 @@ const ensureSecureStorage = async (): Promise<void> => {
   }
 };
 
-export const saveToken = async (token: TokenResponse, config?: RuntimeConfig): Promise<TokenFile> => {
-  await ensureSecureStorage();
-  const stored = tokenFileSchema.parse(toTokenFile(token));
+const writeTokenFile = async (stored: TokenFile, config?: RuntimeConfig): Promise<void> => {
   const filePath = tokenFilePath(config);
 
-  await writeFile(filePath, `${JSON.stringify(stored, null, 2)}\n`, {
+  await writeFile(filePath, `${JSON.stringify(tokenFileSchema.parse(stored), null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600
   });
@@ -81,6 +82,17 @@ export const saveToken = async (token: TokenResponse, config?: RuntimeConfig): P
   } catch {
     // best effort
   }
+};
+
+export const saveToken = async (token: TokenResponse, config?: RuntimeConfig): Promise<TokenFile> => {
+  await ensureSecureStorage();
+  const stored = tokenFileSchema.parse({
+    ...toTokenFile(token),
+    last_refresh_attempt_at: undefined,
+    last_refresh_error_code: undefined,
+    last_refresh_error_message: undefined
+  });
+  await writeTokenFile(stored, config);
 
   return stored;
 };
@@ -99,6 +111,27 @@ export const readToken = async (config?: RuntimeConfig): Promise<TokenFile | nul
 
     throw new SellbotError("TOKEN_INVALID", `Token locale non valido: ${(error as Error).message}`);
   }
+};
+
+export const markTokenRefreshFailure = async (
+  config: RuntimeConfig,
+  error: { code?: string; message: string }
+): Promise<void> => {
+  const token = await readToken(config);
+  if (!token) {
+    return;
+  }
+
+  await ensureSecureStorage();
+  await writeTokenFile(
+    {
+      ...token,
+      last_refresh_attempt_at: new Date().toISOString(),
+      last_refresh_error_code: error.code,
+      last_refresh_error_message: error.message
+    },
+    config
+  );
 };
 
 const tokenExpired = (token: TokenFile, bufferSeconds = 60): boolean => {
@@ -140,7 +173,16 @@ export const getValidUserAccessToken = async (
     throw new SellbotError("TOKEN_EXPIRED", "Access token scaduto e refresh token assente. Eseguire di nuovo 'sellbot auth'.");
   }
 
-  const refreshed = await oauthClient.refreshAccessToken(token.refresh_token);
+  let refreshed: TokenResponse;
+  try {
+    refreshed = await oauthClient.refreshAccessToken(token.refresh_token);
+  } catch (error) {
+    await markTokenRefreshFailure(config, {
+      code: error instanceof SellbotError ? error.code : "TOKEN_REFRESH_FAILED",
+      message: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
 
   // Manteniamo il refresh token precedente se la response non ne restituisce uno nuovo.
   if (!refreshed.refresh_token) {

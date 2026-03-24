@@ -97,16 +97,23 @@ Il flusso corretto e':
 1. chiamare `sellbot_auth_start`
 2. aprire `consentUrl` nel browser
 3. completare login/consenso eBay
-4. copiare l'URL finale di redirect oppure il solo `code`
-5. chiamare `sellbot_auth_complete`
+4. se `EBAY_CALLBACK_URL` e' configurato, attendere il callback HTTP pubblico di `mastrota`
+5. verificare con `sellbot_auth_status` che lo stato sia `authenticated`
+6. solo fallback legacy/debug: chiamare `sellbot_auth_complete` con redirect URL oppure `code`
 
-La sessione OAuth pendente viene salvata localmente in:
+La sessione OAuth viene salvata localmente in:
 
 - `~/.sellbot/ebay-auth.pending.<env>.<client-id>.json`
 
 Il token utente continua a essere salvato in:
 
 - `~/.sellbot/ebay-token.<env>.<client-id>.json`
+
+Path HTTP rilevanti:
+
+- `/mcp`
+- `/healthz`
+- path callback derivato da `EBAY_CALLBACK_URL`, ad esempio `/auth/ebay/callback`
 
 ## Note operative
 
