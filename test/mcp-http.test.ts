@@ -46,6 +46,7 @@ describe("mcp http server", () => {
 
       expect(tools.tools.some((tool) => tool.name === "sellbot_listing_patch_draft")).toBe(true);
       expect(tools.tools.some((tool) => tool.name === "sellbot_listing_prepare_for_publish")).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === "sellbot_remote_listings_list")).toBe(true);
       expect(transport.sessionId).toBeTruthy();
 
       await transport.terminateSession();

@@ -19,6 +19,7 @@ import { completeUserAuth, getUserAuthStatus, startUserAuth } from "../services/
 import { runConfigChecks } from "../services/config-check.js";
 import { patchListingDraft } from "../services/draft-patch.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
+import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
 import { filterShippingServices, summarizeShippingService } from "../shipping/services.js";
 import { toRestMarketplaceId } from "../utils/marketplace.js";
@@ -214,6 +215,40 @@ export const createSellbotMcpServer = (): McpServer => {
       withTool(async () => {
         const config = await loadRuntimeConfig();
         return okResult(await getListingSnapshot(config, folder), "Snapshot listing letta");
+      })
+  );
+
+  server.registerTool(
+    "sellbot_remote_listings_list",
+    {
+      title: "List Remote Listings",
+      description:
+        "Interroga eBay sull'env attivo e restituisce le listing remote note a Inventory API (attive di default).",
+      inputSchema: {
+        active_only: z
+          .boolean()
+          .optional()
+          .describe("Di default true: filtra solo listing PUBLISHED con listingStatus=ACTIVE"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe("Numero massimo di listing remote da restituire (default 100)")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ active_only, limit }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        return okResult(
+          await listRemoteListings(config, {
+            activeOnly: active_only,
+            limit
+          }),
+          "Elenco listing remote letto da eBay"
+        );
       })
   );
 

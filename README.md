@@ -241,7 +241,7 @@ Endpoint:
 Il server MCP espone tool per:
 
 - auth OAuth a due step (`sellbot_auth_start`, `sellbot_auth_complete`, `sellbot_auth_status`)
-- ispezione listing (`sellbot_listings_list`, `sellbot_listing_get`)
+- ispezione listing (`sellbot_listings_list`, `sellbot_listing_get`, `sellbot_remote_listings_list`)
 - pipeline contenuti (`sellbot_scan`, `sellbot_listing_enrich`, `sellbot_listing_patch_draft`, `sellbot_listing_intake_check`, `sellbot_listing_build`, `sellbot_listing_prepare_for_publish`)
 - metadata/config (`sellbot_config_test`, `sellbot_category_suggest`, `sellbot_category_conditions`, `sellbot_shipping_services`)
 - sell flow (`sellbot_listing_preflight`, `sellbot_listing_publish`, `sellbot_listing_revise`)
@@ -255,6 +255,8 @@ Nota importante:
   3. copia l'URL finale di redirect
   4. `sellbot_auth_complete`
 - `sellbot_listings_list` usa di default `scope=current_env`, quindi in `prod` non mostra le listing sandbox gia' pubblicate salvo richiesta esplicita
+- `sellbot_remote_listings_list` interroga davvero eBay sull'env attivo; per la produzione usare `EBAY_ENV=prod`
+- `sellbot_remote_listings_list` usa Inventory API: vede le offer inventory-backed dell'account, non le listing legacy create fuori da Inventory API
 - per correzioni incrementali del contenuto, il tool giusto e' `sellbot_listing_patch_draft`
 - per agenti, il tool workflow consigliato e' `sellbot_listing_prepare_for_publish`
 - i tool `publish` e `revise` via MCP equivalgono a `--yes`

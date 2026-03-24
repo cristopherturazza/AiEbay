@@ -69,6 +69,7 @@ Stato/config:
 - `sellbot_config_test`
 - `sellbot_listings_list`
 - `sellbot_listing_get`
+- `sellbot_remote_listings_list`
 
 Pipeline listing:
 
@@ -115,6 +116,8 @@ Il token utente continua a essere salvato in:
 - i tool che parlano con eBay usano le stesse policy/token/config della CLI
 - il server MCP e' pensato come adapter sottile sopra la business logic gia' esistente
 - `sellbot_listings_list` usa di default `scope=current_env`, quindi non mischia sandbox e production salvo richiesta esplicita
+- `sellbot_remote_listings_list` interroga eBay sull'env attivo; per colpire la produzione serve `EBAY_ENV=prod`
+- `sellbot_remote_listings_list` usa Inventory API, quindi restituisce le offer inventory-backed e non le listing legacy create fuori da Inventory API
 - `sellbot_listing_prepare_for_publish` e' il tool workflow consigliato per agenti: enrich -> intake -> build -> preflight
 
 ## Smoke test usato nel repo
