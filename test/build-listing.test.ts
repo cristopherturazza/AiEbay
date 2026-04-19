@@ -32,7 +32,13 @@ const makeConfig = (cwd: string): RuntimeConfig => {
     ebayMediaBaseUrl: defaults.mediaBaseUrl,
     locale: "it-IT",
     merchantLocationKey: undefined,
-    policies: {}
+    policies: {},
+    ollama: {
+      baseUrl: "http://127.0.0.1:11434",
+      visionModel: "gemma4:e4b",
+      visionKeepAlive: "60s",
+      visionTimeoutMs: 120_000
+    }
   };
 };
 

@@ -49,8 +49,13 @@ npm run mcp:http
 
 Endpoint esposti:
 
-- MCP: `http://127.0.0.1:3000/mcp`
+- MCP Streamable HTTP: `http://127.0.0.1:3000/mcp`
+- MCP SSE legacy stream: `GET http://127.0.0.1:3000/sse` (endpoint message: `POST /messages?sessionId=...`)
 - health: `http://127.0.0.1:3000/healthz`
+
+Il transport SSE legacy espone lo stesso `McpServer` dello Streamable HTTP
+e va usato solo per client che non parlano ancora Streamable HTTP
+(es. OpenClaw v2026.4.9). I client nuovi devono continuare a usare `/mcp`.
 
 Configurazione client HTTP pronta da copiare:
 
@@ -89,6 +94,15 @@ Metadata:
 - `sellbot_category_conditions`
 - `sellbot_shipping_services`
 
+Vision pipeline libri (Ollama):
+
+- `sellbot_book_identify_from_photo`: prende un path immagine e restituisce
+  candidati `{title, author, isbn, confidence}`. Se incerto restituisce
+  `match="none"` e `candidates=[]`; l'agente puo' decidere se chiedere
+  all'utente. Usa il modello definito da `MASTROTA_OLLAMA_VISION_MODEL`
+  (default `gemma4:e4b`) con `keep_alive` corto per non sfrattare il
+  modello testuale pinned del baseline.
+
 ## OAuth in MCP
 
 Nel server MCP non usiamo browser/callback locale come prerequisito del tool.
@@ -111,7 +125,8 @@ Il token utente continua a essere salvato in:
 
 Path HTTP rilevanti:
 
-- `/mcp`
+- `/mcp` — Streamable HTTP (client moderni)
+- `/sse` + `/messages?sessionId=...` — SSE legacy (client pre-Streamable, es. OpenClaw v2026.4.9)
 - `/healthz`
 - path callback derivato da `EBAY_CALLBACK_URL`, ad esempio `/auth/ebay/callback`
 
@@ -141,5 +156,19 @@ Path HTTP rilevanti:
 2. `GET /healthz`
 3. handshake via `StreamableHTTPClientTransport`
 4. `listTools`
+5. handshake via `SSEClientTransport` su `/sse` + `/messages`
 
 Nel sandbox dei test il bind locale puo' essere bloccato; per questo il test automatico degrada in modo pulito, mentre lo smoke test reale va eseguito fuori sandbox.
+
+Smoke test manuale SSE da shell:
+
+```bash
+curl -N http://127.0.0.1:3002/sse
+# Alla prima riga ricevi:
+#   event: endpoint
+#   data: /messages?sessionId=<uuid>
+# Tieni aperto il GET e in un altro terminale:
+curl -X POST 'http://127.0.0.1:3002/messages?sessionId=<uuid>' \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```

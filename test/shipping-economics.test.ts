@@ -29,6 +29,12 @@ const makeConfig = (overrides?: Partial<RuntimeConfig>): RuntimeConfig => {
       paymentPolicyId: "PAYMENT-1",
       returnPolicyId: "RETURN-1"
     },
+    ollama: {
+      baseUrl: "http://127.0.0.1:11434",
+      visionModel: "gemma4:e4b",
+      visionKeepAlive: "60s",
+      visionTimeoutMs: 120_000
+    },
     ...overrides
   };
 };

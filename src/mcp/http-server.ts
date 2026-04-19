@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { loadRuntimeConfig } from "../config.js";
@@ -11,12 +12,20 @@ import { getConfiguredAuthCallbackPath, handleUserAuthCallback } from "../servic
 import { createSellbotMcpServer } from "./server.js";
 
 const MCP_PATH = "/mcp";
+const SSE_PATH = "/sse";
+const SSE_MESSAGES_PATH = "/messages";
 const HEALTH_PATH = "/healthz";
 const MAX_BODY_BYTES = 1024 * 1024;
 
 type SessionEntry = {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
+  closing: boolean;
+};
+
+type SseSessionEntry = {
+  server: McpServer;
+  transport: SSEServerTransport;
   closing: boolean;
 };
 
@@ -30,6 +39,8 @@ export interface RunningMcpHttpServer {
   port: number;
   origin: string;
   mcpUrl: string;
+  sseUrl: string;
+  sseMessagesPath: string;
   close: () => Promise<void>;
 }
 
@@ -126,6 +137,56 @@ const closeSession = async (sessionId: string, sessions: Map<string, SessionEntr
   await entry.server.close();
 };
 
+const closeSseSession = async (sessionId: string, sessions: Map<string, SseSessionEntry>): Promise<void> => {
+  const entry = sessions.get(sessionId);
+  if (!entry) {
+    return;
+  }
+
+  entry.closing = true;
+  sessions.delete(sessionId);
+  try {
+    await entry.transport.close();
+  } catch (error) {
+    logger.warn(
+      `Chiusura transport SSE ${sessionId} non pulita: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  await entry.server.close();
+};
+
+const createSseSessionEntry = async (
+  res: ServerResponse,
+  sessions: Map<string, SseSessionEntry>
+): Promise<SseSessionEntry> => {
+  const server = createSellbotMcpServer();
+  const transport = new SSEServerTransport(SSE_MESSAGES_PATH, res);
+  const entry: SseSessionEntry = { server, transport, closing: false };
+
+  transport.onclose = () => {
+    const sessionId = transport.sessionId;
+    sessions.delete(sessionId);
+    if (entry.closing) {
+      return;
+    }
+
+    entry.closing = true;
+    void server.close().catch((error) => {
+      logger.error(
+        `Errore chiusura sessione MCP SSE ${sessionId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+  };
+
+  transport.onerror = (error) => {
+    logger.error(`Errore transport MCP SSE: ${error.message}`);
+  };
+
+  await server.connect(transport);
+  sessions.set(transport.sessionId, entry);
+  return entry;
+};
+
 const createSessionEntry = async (sessions: Map<string, SessionEntry>): Promise<SessionEntry> => {
   const server = createSellbotMcpServer();
   let entry: SessionEntry;
@@ -171,6 +232,7 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
   const host = options.host?.trim() || "127.0.0.1";
   const port = options.port ?? config.sellbotPort;
   const sessions = new Map<string, SessionEntry>();
+  const sseSessions = new Map<string, SseSessionEntry>();
   const authCallbackPath = getConfiguredAuthCallbackPath(config);
 
   const renderAuthCallbackPage = (state: Awaited<ReturnType<typeof handleUserAuthCallback>>["responseState"]): string => {
@@ -238,9 +300,11 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
     if (req.method === "GET" && requestUrl.pathname === HEALTH_PATH) {
       sendJson(res, 200, {
         ok: true,
+        transports: ["streamable-http", "sse-legacy"],
         transport: "streamable-http",
         env: config.ebayEnv,
-        active_sessions: sessions.size
+        active_sessions: sessions.size,
+        active_sse_sessions: sseSessions.size
       });
       return;
     }
@@ -263,6 +327,53 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
       }
 
       sendHtml(res, result.httpStatus, renderAuthCallbackPage(result.responseState));
+      return;
+    }
+
+    if (requestUrl.pathname === SSE_PATH) {
+      if (req.method !== "GET") {
+        sendPlain(res, 405, "Method Not Allowed");
+        return;
+      }
+
+      try {
+        await createSseSessionEntry(res, sseSessions);
+      } catch (error) {
+        logger.error(
+          `Errore apertura sessione MCP SSE: ${error instanceof Error ? error.message : String(error)}`
+        );
+        if (!res.headersSent) {
+          sendJsonRpcError(res, 500, "Impossibile aprire sessione SSE");
+        }
+      }
+      return;
+    }
+
+    if (requestUrl.pathname === SSE_MESSAGES_PATH) {
+      if (req.method !== "POST") {
+        sendPlain(res, 405, "Method Not Allowed");
+        return;
+      }
+
+      const sessionId = requestUrl.searchParams.get("sessionId");
+      if (!sessionId) {
+        sendJsonRpcError(res, 400, "Missing sessionId query param");
+        return;
+      }
+
+      const entry = sseSessions.get(sessionId);
+      if (!entry) {
+        sendJsonRpcError(res, 404, "Sessione MCP SSE non trovata");
+        return;
+      }
+
+      try {
+        await entry.transport.handlePostMessage(req, res);
+      } catch (error) {
+        logger.error(
+          `Errore handlePostMessage SSE ${sessionId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       return;
     }
 
@@ -363,8 +474,13 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
     port: resolvedPort,
     origin,
     mcpUrl: `${origin}${MCP_PATH}`,
+    sseUrl: `${origin}${SSE_PATH}`,
+    sseMessagesPath: SSE_MESSAGES_PATH,
     close: async () => {
-      await Promise.allSettled([...sessions.keys()].map((sessionId) => closeSession(sessionId, sessions)));
+      await Promise.allSettled([
+        ...[...sessions.keys()].map((sessionId) => closeSession(sessionId, sessions)),
+        ...[...sseSessions.keys()].map((sessionId) => closeSseSession(sessionId, sseSessions))
+      ]);
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error) {
@@ -382,6 +498,7 @@ export const startMcpHttpServer = async (options: McpHttpServerOptions = {}): Pr
 export const runMcpHttpServer = async (options: McpHttpServerOptions = {}): Promise<void> => {
   const server = await startMcpHttpServer(options);
   logger.info(`sellbot MCP Streamable HTTP pronto su ${server.mcpUrl}`);
+  logger.info(`sellbot MCP SSE legacy pronto su ${server.origin}${SSE_PATH} (POST ${SSE_MESSAGES_PATH}?sessionId=...)`);
   logger.info(`health: ${server.origin}${HEALTH_PATH}`);
 };
 

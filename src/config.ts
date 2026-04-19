@@ -48,7 +48,11 @@ const envSchema = z.object({
   SELLBOT_ENV_FILE: optionalString(),
   SELLBOT_CONFIG_FILE: optionalString(),
   SELLBOT_NOTIFICATION_ENDPOINT_URL: optionalUrl(),
-  SELLBOT_NOTIFICATION_VERIFICATION_TOKEN: optionalString()
+  SELLBOT_NOTIFICATION_VERIFICATION_TOKEN: optionalString(),
+  MASTROTA_OLLAMA_BASE_URL: optionalUrl(),
+  MASTROTA_OLLAMA_VISION_MODEL: optionalString(),
+  MASTROTA_OLLAMA_VISION_KEEP_ALIVE: optionalString(),
+  MASTROTA_OLLAMA_VISION_TIMEOUT_MS: z.coerce.number().int().positive().optional()
 });
 
 const projectConfigSchema = z.object({
@@ -90,7 +94,22 @@ export interface RuntimeConfig {
     paymentPolicyId?: string;
     returnPolicyId?: string;
   };
+  ollama: OllamaVisionConfig;
 }
+
+export interface OllamaVisionConfig {
+  baseUrl: string;
+  visionModel: string;
+  visionKeepAlive: string;
+  visionTimeoutMs: number;
+}
+
+export const DEFAULT_OLLAMA_VISION_CONFIG: OllamaVisionConfig = {
+  baseUrl: "http://127.0.0.1:11434",
+  visionModel: "gemma4:e4b",
+  visionKeepAlive: "60s",
+  visionTimeoutMs: 120_000
+};
 
 export interface MoneyAmount {
   value: number;
@@ -319,6 +338,12 @@ export const loadRuntimeConfig = async (cwd = process.cwd()): Promise<RuntimeCon
       fulfillmentPolicyIdByProfile: normalizeProfilePolicyMap(projectConfig.policies?.fulfillmentPolicyIdByProfile),
       paymentPolicyId: projectConfig.policies?.paymentPolicyId,
       returnPolicyId: projectConfig.policies?.returnPolicyId
+    },
+    ollama: {
+      baseUrl: env.MASTROTA_OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_VISION_CONFIG.baseUrl,
+      visionModel: env.MASTROTA_OLLAMA_VISION_MODEL ?? DEFAULT_OLLAMA_VISION_CONFIG.visionModel,
+      visionKeepAlive: env.MASTROTA_OLLAMA_VISION_KEEP_ALIVE ?? DEFAULT_OLLAMA_VISION_CONFIG.visionKeepAlive,
+      visionTimeoutMs: env.MASTROTA_OLLAMA_VISION_TIMEOUT_MS ?? DEFAULT_OLLAMA_VISION_CONFIG.visionTimeoutMs
     }
   };
 };

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -23,6 +24,7 @@ import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
 import { filterShippingServices, summarizeShippingService } from "../shipping/services.js";
 import { toRestMarketplaceId } from "../utils/marketplace.js";
+import { identifyBookFromPhoto } from "../vision/book-identification.js";
 
 const resultSchema = z.object({
   ok: z.literal(true),
@@ -625,6 +627,61 @@ export const createSellbotMcpServer = (): McpServer => {
             policies
           },
           "Condition policy letta"
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_book_identify_from_photo",
+    {
+      title: "Identify Book From Photo",
+      description:
+        "Identifica titolo/autore/ISBN di un libro a partire da una foto di copertina usando il modello vision Ollama (default gemma4:e4b). Se l'identificazione e' incerta restituisce candidates vuoti: l'agente puo' decidere di chiedere all'utente.",
+      inputSchema: {
+        photo_path: z
+          .string()
+          .min(1)
+          .describe("Path del file immagine (assoluto o relativo a cwd del processo)"),
+        hint: z
+          .string()
+          .optional()
+          .describe("Suggerimento testuale opzionale dell'utente, es. 'romanzo italiano anni '80'")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ photo_path, hint }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const resolvedPath = path.isAbsolute(photo_path)
+          ? photo_path
+          : path.resolve(config.cwd, photo_path);
+
+        const result = await identifyBookFromPhoto({
+          photoPath: resolvedPath,
+          baseUrl: config.ollama.baseUrl,
+          model: config.ollama.visionModel,
+          keepAlive: config.ollama.visionKeepAlive,
+          timeoutMs: config.ollama.visionTimeoutMs,
+          hint
+        });
+
+        const message =
+          result.match === "none"
+            ? result.reason
+              ? `Nessuna corrispondenza affidabile (${result.reason}): valuta di chiedere all'utente`
+              : "Nessuna corrispondenza affidabile: valuta di chiedere all'utente"
+            : `Candidati libro identificati (match=${result.match})`;
+
+        return okResult(
+          {
+            photo_path: resolvedPath,
+            model: result.model,
+            match: result.match,
+            candidates: result.candidates,
+            elapsed_ms: result.elapsed_ms,
+            reason: result.reason ?? null
+          },
+          message
         );
       })
   );

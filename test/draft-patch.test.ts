@@ -35,7 +35,13 @@ const makeConfig = (cwd: string): RuntimeConfig => {
     notificationVerificationToken: undefined,
     merchantLocationKey: undefined,
     shippingProfiles: undefined,
-    policies: {}
+    policies: {},
+    ollama: {
+      baseUrl: "http://127.0.0.1:11434",
+      visionModel: "gemma4:e4b",
+      visionKeepAlive: "60s",
+      visionTimeoutMs: 120_000
+    }
   };
 };
 

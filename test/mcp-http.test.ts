@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { EbayOAuthClient } from "../src/ebay/oauth.js";
 import type { RunningMcpHttpServer } from "../src/mcp/http-server.js";
@@ -102,6 +103,71 @@ describe.sequential("mcp http server", () => {
       await client.close();
       await transport.close();
     }
+  });
+
+  it("espone anche il transport SSE legacy su /sse + /messages", async () => {
+    const server = await startMcpHttpServer({ host: "127.0.0.1", port: 0 }).catch((error) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        return null;
+      }
+
+      throw error;
+    });
+
+    if (!server) {
+      return;
+    }
+
+    runningServers.push(server);
+
+    const health = await fetch(`${server.origin}/healthz`);
+    const healthJson = (await health.json()) as { transports?: string[] };
+    expect(healthJson.transports).toContain("sse-legacy");
+
+    const client = new Client({ name: "sellbot-sse-test-client", version: "0.1.0" });
+    const transport = new SSEClientTransport(new URL(server.sseUrl));
+
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.some((tool) => tool.name === "sellbot_auth_status")).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === "sellbot_book_identify_from_photo")).toBe(true);
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
+  it("risponde 400 sui POST /messages senza sessionId valido", async () => {
+    const server = await startMcpHttpServer({ host: "127.0.0.1", port: 0 }).catch((error) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        return null;
+      }
+
+      throw error;
+    });
+
+    if (!server) {
+      return;
+    }
+
+    runningServers.push(server);
+
+    const missing = await fetch(`${server.origin}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    });
+    expect(missing.status).toBe(400);
+
+    const unknown = await fetch(`${server.origin}/messages?sessionId=does-not-exist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    });
+    expect(unknown.status).toBe(404);
   });
 
   it("completa l'auth eBay via callback HTTP pubblico senza copy-paste", async () => {
