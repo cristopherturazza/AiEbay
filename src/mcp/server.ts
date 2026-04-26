@@ -17,6 +17,7 @@ import { getToSellRoot, resolveListing, writeDraft, writeIntakeReport } from "..
 import { buildListingIntakeReport } from "../intake/index.js";
 import { logger } from "../logger.js";
 import { completeUserAuth, getUserAuthStatus, startUserAuth } from "../services/auth-flow.js";
+import { readToken } from "../token/token-store.js";
 import { runConfigChecks } from "../services/config-check.js";
 import { patchListingDraft } from "../services/draft-patch.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
@@ -34,11 +35,11 @@ const resultSchema = z.object({
 
 const asText = (value: unknown): string => JSON.stringify(value, null, 2);
 
-const okResult = (data: unknown, message?: string) => ({
+const okResult = (data: unknown, message?: string, textOverride?: string) => ({
   content: [
     {
       type: "text" as const,
-      text: asText({ ok: true, message, data })
+      text: textOverride ?? asText({ ok: true, message, data })
     }
   ],
   structuredContent: {
@@ -119,12 +120,31 @@ export const createSellbotMcpServer = (): McpServer => {
       withTool(async () => {
         const config = await loadRuntimeConfig();
         const result = await startUserAuth(config);
-        return okResult(
-          result,
+
+        const followup =
           result.callbackMode === "automatic_http"
-            ? "Apri consentUrl e poi monitora sellbot_auth_status: il callback HTTP salvera' il token automaticamente"
-            : "Apri consentUrl e poi chiama sellbot_auth_complete con redirect_url o code"
-        );
+            ? "Quando l'utente completa il consenso nel browser, il callback HTTP salvera' automaticamente il token. Monitora lo stato con sellbot_auth_status."
+            : "Dopo il consenso, copia l'URL finale dal browser (dopo il redirect) e chiama il tool sellbot_auth_complete con redirect_url=<URL>.";
+
+        const message =
+          "Avvio flusso OAuth eBay completato. Apri questo URL nel browser per autorizzare l'app:";
+
+        const text = [
+          "ok: true",
+          `message: ${message}`,
+          "",
+          result.consentUrl,
+          "",
+          followup,
+          "",
+          `callbackMode: ${result.callbackMode}`,
+          `state: ${result.state}`,
+          `expiresAt: ${result.expiresAt}`,
+          `authSessionId: ${result.authSessionId}`,
+          `reused: ${result.reused}`
+        ].join("\n");
+
+        return okResult(result, message, text);
       })
   );
 
@@ -148,7 +168,46 @@ export const createSellbotMcpServer = (): McpServer => {
         }
 
         const config = await loadRuntimeConfig();
-        return okResult(await completeUserAuth(config, raw), "Token eBay salvato");
+        const result = await completeUserAuth(config, raw);
+        const token = await readToken(config).catch(() => null);
+
+        const message = result.alreadyCompleted
+          ? "Sessione gia' autenticata: nessuna azione necessaria."
+          : "Autenticazione eBay completata: token salvato.";
+
+        const data = {
+          ...result,
+          token: token
+            ? {
+                expires_at: token.expires_at,
+                refresh_token_expires_at: token.refresh_token_expires_at ?? null,
+                scope: token.scope ?? null
+              }
+            : null
+        };
+
+        const lines = [
+          "ok: true",
+          `message: ${message}`,
+          "",
+          `tokenFilePath: ${result.tokenFilePath}`,
+          `authSessionId: ${result.authSessionId}`,
+          `alreadyCompleted: ${result.alreadyCompleted}`
+        ];
+        if (result.completedAt) {
+          lines.push(`completedAt: ${result.completedAt}`);
+        }
+        if (token) {
+          lines.push(`tokenExpiresAt: ${token.expires_at}`);
+          if (token.refresh_token_expires_at) {
+            lines.push(`refreshTokenExpiresAt: ${token.refresh_token_expires_at}`);
+          }
+          if (token.scope) {
+            lines.push(`scope: ${token.scope}`);
+          }
+        }
+
+        return okResult(data, message, lines.join("\n"));
       })
   );
 
