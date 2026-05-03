@@ -103,6 +103,15 @@ Riferimenti OAuth ufficiali:
 - [Authorization code grant](https://developer.ebay.com/api-docs/static/oauth-authorization-code-grant-request.html)
 - [Refresh token grant](https://developer.ebay.com/api-docs/static/oauth-refresh-token-request.html)
 
+#### Vision provider (book identification)
+
+`sellbot_book_identify_from_photo` e il flow `sellbot_listing_create_from_inbox` usano un modello vision per identificare titolo/autore dalla copertina. Due provider:
+
+- `MASTROTA_VISION_PROVIDER=ollama` (default): Ollama self-hosted, `MASTROTA_OLLAMA_VISION_MODEL` (default `gemma4:e4b`). Richiede una GPU per avere latenze accettabili; su CPU-only la singola identificazione richiede 1-3 minuti.
+- `MASTROTA_VISION_PROVIDER=openrouter`: OpenRouter cloud (`MASTROTA_OPENROUTER_VISION_MODEL` default `openai/gpt-4o-mini`). 2-5s a immagine, costo nell'ordine dei millesimi di euro. Richiede `MASTROTA_OPENROUTER_API_KEY`.
+
+Switch a runtime cambiando solo `MASTROTA_VISION_PROVIDER` + relative env del provider scelto. Il tool MCP non cambia.
+
 ### 2) `sellbot.config.json` (opzionale ma necessario per publish)
 
 Crea il file nella root usando `sellbot.config.example.json` come base:

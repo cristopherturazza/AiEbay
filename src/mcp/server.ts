@@ -3,7 +3,7 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadRuntimeConfig } from "../config.js";
+import { loadRuntimeConfig, resolveVisionBackend } from "../config.js";
 import { runBuild } from "../commands/build.js";
 import { runEnrich } from "../commands/enrich.js";
 import { runPublish } from "../commands/publish.js";
@@ -835,10 +835,7 @@ export const createSellbotMcpServer = (): McpServer => {
 
         const result = await identifyBookFromPhoto({
           photoPath: resolvedPath,
-          baseUrl: config.ollama.baseUrl,
-          model: config.ollama.visionModel,
-          keepAlive: config.ollama.visionKeepAlive,
-          timeoutMs: config.ollama.visionTimeoutMs,
+          backend: resolveVisionBackend(config.vision),
           hint
         });
 
