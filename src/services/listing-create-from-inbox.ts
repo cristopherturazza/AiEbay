@@ -4,6 +4,7 @@ import { runEnrich } from "../commands/enrich.js";
 import { resolveVisionBackend, visionModelLabel, type RuntimeConfig } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { getInboxSession, promoteInboxToListing } from "../fs/inbox.js";
+import { recordRecentPromotion } from "../fs/inbox-state.js";
 import { getToSellRoot, listPhotoFiles } from "../fs/listings.js";
 import { logger } from "../logger.js";
 import { isValidSlug, slugifyTitle } from "../utils/slug.js";
@@ -191,6 +192,12 @@ export const createListingFromInbox = async (
 
   await runEnrich(promoted.slug, { module: moduleId });
   const snapshot = await getListingSnapshot(config, promoted.slug);
+
+  await recordRecentPromotion(toSellRoot, session.sessionId, {
+    slug: promoted.slug,
+    title: titleUsed,
+    promoted_at: new Date().toISOString()
+  });
 
   return {
     slug: promoted.slug,

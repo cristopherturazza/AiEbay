@@ -3,7 +3,7 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadRuntimeConfig, resolveVisionBackend } from "../config.js";
+import { loadRuntimeConfig, resolveVisionBackend, type RuntimeConfig } from "../config.js";
 import { runBuild } from "../commands/build.js";
 import { runEnrich } from "../commands/enrich.js";
 import { runPublish } from "../commands/publish.js";
@@ -14,10 +14,18 @@ import { EbayMetadataClient } from "../ebay/metadata.js";
 import { EbayTaxonomyClient } from "../ebay/taxonomy.js";
 import { isSellbotError } from "../errors.js";
 import {
+  clearInboxSession,
   getInboxSession,
+  getInboxSessionStatus,
   purgeStaleInboxSessions,
   saveInboxPhoto
 } from "../fs/inbox.js";
+import {
+  clearRecentPromotion,
+  getRecentPromotion,
+  removeStalePromotions,
+  type RecentPromotionLookup
+} from "../fs/inbox-state.js";
 import { getToSellRoot, resolveListing, writeDraft, writeIntakeReport } from "../fs/listings.js";
 import { buildListingIntakeReport } from "../intake/index.js";
 import { logger } from "../logger.js";
@@ -25,7 +33,9 @@ import { completeUserAuth, getUserAuthStatus, startUserAuth } from "../services/
 import { readToken } from "../token/token-store.js";
 import { runConfigChecks } from "../services/config-check.js";
 import { patchListingDraft } from "../services/draft-patch.js";
+import { addPhotoToListing, adoptInboxPhotosToListing } from "../services/listing-add-photo.js";
 import { createListingFromInbox } from "../services/listing-create-from-inbox.js";
+import { deleteListing } from "../services/listing-delete.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
 import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
@@ -92,6 +102,43 @@ const withTool = async (operation: () => Promise<ReturnType<typeof okResult>>) =
   } catch (error) {
     return errorResult(error);
   }
+};
+
+interface RecentPromotionPayload {
+  session_id: string;
+  slug: string;
+  title: string;
+  promoted_at: string;
+  age_seconds: number;
+}
+
+const buildRecentPromotionPayload = (
+  sessionId: string,
+  lookup: RecentPromotionLookup
+): RecentPromotionPayload => ({
+  session_id: sessionId,
+  slug: lookup.promotion.slug,
+  title: lookup.promotion.title,
+  promoted_at: lookup.promotion.promoted_at,
+  age_seconds: Math.round(lookup.age_ms / 1000)
+});
+
+const lookupRecentPromotionForResponse = async (
+  config: RuntimeConfig,
+  sessionId: string
+): Promise<RecentPromotionPayload | null> => {
+  const toSellRoot = getToSellRoot(config.cwd);
+  const lookup = await getRecentPromotion(toSellRoot, sessionId);
+  if (!lookup) {
+    return null;
+  }
+  try {
+    await resolveListing(toSellRoot, lookup.promotion.slug);
+  } catch {
+    await clearRecentPromotion(toSellRoot, sessionId);
+    return null;
+  }
+  return buildRecentPromotionPayload(sessionId, lookup);
 };
 
 export const createSellbotMcpServer = (): McpServer => {
@@ -701,7 +748,7 @@ export const createSellbotMcpServer = (): McpServer => {
     {
       title: "Inbox Add Photo",
       description:
-        "Salva una foto in un'inbox temporanea (ToSell/_inbox/<session_id>/photos/) prima della creazione della listing. Pensato per client che ricevono immagini da chat (es. Telegram): non serve conoscere lo slug. Le inbox abbandonate vengono purgate automaticamente dopo 24h.",
+        "Salva una foto in un'inbox temporanea (ToSell/_inbox/<session_id>/photos/) prima della creazione della listing. Pensato per client che ricevono immagini da chat (es. Telegram): non serve conoscere lo slug. Le inbox abbandonate vengono purgate automaticamente dopo 24h.\n\nGESTIONE CONTESTO: la response include 'recent_promotion' se nella stessa session_id e' stata appena promossa una listing (entro ~60 min). Quando presente, NON chiamare automaticamente sellbot_listing_create_from_inbox: chiedi all'utente se la nuova foto appartiene alla listing esistente (es. retro/dettaglio) — in tal caso usa sellbot_listing_add_photo (slug=recent_promotion.slug) invece di creare una nuova listing.",
       inputSchema: {
         bytes_base64: z.string().min(1).describe("Contenuto del file immagine codificato base64"),
         mime: z
@@ -740,6 +787,13 @@ export const createSellbotMcpServer = (): McpServer => {
           filename
         });
 
+        const recentPromotion = await lookupRecentPromotionForResponse(config, session.sessionId);
+
+        const baseMessage = `Foto salvata in inbox (${result.totalPhotos} totali per la sessione)`;
+        const message = recentPromotion
+          ? `${baseMessage}. Attenzione: la sessione ${session.sessionId} ha appena promosso la listing '${recentPromotion.slug}' (~${recentPromotion.age_seconds}s fa). Chiedi all'utente se questa foto e' del retro/dettaglio di quella listing prima di creare un nuovo articolo.`
+          : baseMessage;
+
         return okResult(
           {
             session_id: session.sessionId,
@@ -747,9 +801,10 @@ export const createSellbotMcpServer = (): McpServer => {
             filename: result.filename,
             bytes: result.bytes,
             total_photos: result.totalPhotos,
-            purged_sessions: purge.purged
+            purged_sessions: purge.purged,
+            recent_promotion: recentPromotion
           },
-          `Foto salvata in inbox (${result.totalPhotos} totali per la sessione)`
+          message
         );
       })
   );
@@ -759,7 +814,7 @@ export const createSellbotMcpServer = (): McpServer => {
     {
       title: "Create Listing From Inbox",
       description:
-        "Promuove le foto di un'inbox a una listing vera: identifica il titolo via vision (per moduli book/auto), genera lo slug dal titolo, sposta la cartella sotto ToSell/<slug>/ ed esegue enrichment. Restituisce snapshot e foto identificata come copertina. Se vision non identifica il libro e non passi title_override/slug_override fallisce con TITLE_REQUIRED esponendo i candidati.",
+        "Promuove le foto di un'inbox a una listing vera: identifica il titolo via vision (per moduli book/auto), genera lo slug dal titolo, sposta la cartella sotto ToSell/<slug>/ ed esegue enrichment. Restituisce snapshot e foto identificata come copertina. Se vision non identifica il libro e non passi title_override/slug_override fallisce con TITLE_REQUIRED esponendo i candidati.\n\nIMPORTANTE: NON chiamare questo tool quando la response di sellbot_inbox_add_photo include 'recent_promotion' senza prima aver chiesto all'utente se la nuova foto appartiene alla listing appena creata. In quel caso, usa sellbot_listing_add_photo per aggiungere la foto alla listing esistente; chiama sellbot_inbox_clear sulla sessione (per ripulire l'inbox in cui e' finita la foto del retro) e poi richiedi conferma esplicita prima di partire con un secondo articolo.",
       inputSchema: {
         session_id: z
           .string()
@@ -856,6 +911,205 @@ export const createSellbotMcpServer = (): McpServer => {
             reason: result.reason ?? null
           },
           message
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_add_photo",
+    {
+      title: "Add Photo To Listing",
+      description:
+        "Aggiunge una foto a una listing gia' creata sotto ToSell/<slug>/photos/. Usa questo tool quando l'utente conferma che una nuova foto e' del retro/dettaglio di una listing esistente (vedi 'recent_promotion' nella response di sellbot_inbox_add_photo). Per spostare in blocco le foto gia' presenti in un'inbox usa invece sellbot_listing_adopt_inbox_photos.",
+      inputSchema: {
+        folder: z.string().min(1).describe("Slug della listing (es. il-nome-della-rosa) o path assoluto."),
+        bytes_base64: z.string().min(1).describe("Contenuto del file immagine codificato base64."),
+        mime: z
+          .string()
+          .min(1)
+          .describe("MIME type. Accettati: image/jpeg, image/png, image/heic."),
+        filename: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filename desiderato. Se omesso viene auto-generato (photo-<ts>.<ext>).")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ folder, bytes_base64, mime, filename }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const result = await addPhotoToListing(config, folder, {
+          bytesBase64: bytes_base64,
+          mime,
+          filename
+        });
+        return okResult(
+          {
+            slug: result.slug,
+            listing_dir: result.listing_dir,
+            photo_path: result.photoPath,
+            filename: result.filename,
+            bytes: result.bytes,
+            total_photos: result.totalPhotos
+          },
+          `Foto aggiunta a ${result.slug} (${result.totalPhotos} totali)`
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_adopt_inbox_photos",
+    {
+      title: "Adopt Inbox Photos Into Listing",
+      description:
+        "Sposta tutte le foto di una sessione inbox dentro la cartella photos/ di una listing esistente, poi rimuove la sessione inbox. Usa questo tool nel flusso 'foto del retro inviata DOPO la creazione del libro': l'utente ha appena confermato che le foto in arrivo appartengono alla listing 'recent_promotion' segnalata da sellbot_inbox_add_photo.",
+      inputSchema: {
+        folder: z.string().min(1).describe("Slug della listing destinazione o path assoluto."),
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe("Identificatore della sessione inbox sorgente (default: 'default').")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ folder, session_id }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const result = await adoptInboxPhotosToListing(config, folder, session_id);
+        return okResult(
+          {
+            slug: result.slug,
+            listing_dir: result.listing_dir,
+            source_session_id: result.source_session_id,
+            moved_filenames: result.moved_filenames,
+            total_photos_after: result.total_photos_after
+          },
+          `Spostate ${result.moved_filenames.length} foto in ${result.slug} (sessione ${result.source_session_id} ripulita)`
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_inbox_status",
+    {
+      title: "Inbox Status",
+      description:
+        "Ispeziona lo stato corrente di una sessione inbox e l'eventuale promozione recente associata. Usa questo tool prima di decidere se trattare nuove foto come 'retro/dettaglio' di una listing appena creata o come nuovo articolo: la response include il numero di foto attualmente in inbox e, se presente, la listing promossa di recente (entro ~60 min) per quella session_id.",
+      inputSchema: {
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe("Identificatore della sessione (default: 'default').")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ session_id }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const toSellRoot = getToSellRoot(config.cwd);
+        await removeStalePromotions(toSellRoot);
+        const status = await getInboxSessionStatus(toSellRoot, session_id);
+        const recentPromotion = await lookupRecentPromotionForResponse(config, status.sessionId);
+        const messageParts = [
+          `Inbox ${status.sessionId}: ${status.exists ? `${status.photos.length} foto` : "vuota"}`
+        ];
+        if (recentPromotion) {
+          messageParts.push(
+            `promozione recente: ${recentPromotion.slug} (~${recentPromotion.age_seconds}s fa)`
+          );
+        }
+        return okResult(
+          {
+            session_id: status.sessionId,
+            exists: status.exists,
+            dir: status.dir,
+            photos: status.photos,
+            recent_promotion: recentPromotion
+          },
+          messageParts.join(" — ")
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_inbox_clear",
+    {
+      title: "Inbox Clear",
+      description:
+        "Cancella tutte le foto e la cartella di una sessione inbox (ToSell/_inbox/<session_id>/). Usa questo tool per scartare upload sbagliati prima di promuovere a listing, oppure per ripulire l'inbox dopo aver capito che le foto in arrivo erano del retro della listing 'recent_promotion'.",
+      inputSchema: {
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe("Identificatore della sessione da cancellare (default: 'default').")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ session_id }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const toSellRoot = getToSellRoot(config.cwd);
+        const cleared = await clearInboxSession(toSellRoot, session_id);
+        await clearRecentPromotion(toSellRoot, cleared.sessionId);
+        const message = cleared.existed
+          ? `Inbox ${cleared.sessionId} cancellata (${cleared.removedPhotos} foto rimosse)`
+          : `Inbox ${cleared.sessionId} non esisteva: nessuna azione`;
+        return okResult(
+          {
+            session_id: cleared.sessionId,
+            existed: cleared.existed,
+            dir: cleared.dir,
+            removed_photos: cleared.removedPhotos
+          },
+          message
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_delete",
+    {
+      title: "Delete Listing",
+      description:
+        "Cancella una listing locale (cartella ToSell/<slug>/ con foto, draft, intake, enrichment, status). Operazione irreversibile, NON ritira la pubblicazione su eBay: se la listing e' in stato 'published' il tool rifiuta a meno di force=true. Usa per ripulire bozze a meta' opera o duplicati.",
+      inputSchema: {
+        folder: z.string().min(1).describe("Slug della listing o path assoluto."),
+        confirm: z
+          .literal(true)
+          .describe("Conferma esplicita richiesta: passa true solo dopo aver avuto conferma dall'utente."),
+        force: z
+          .boolean()
+          .optional()
+          .describe("Se true cancella anche listing in stato 'published' (la pubblicazione su eBay resta attiva).")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ folder, confirm, force }) =>
+      withTool(async () => {
+        if (confirm !== true) {
+          throw new Error("Per cancellare una listing serve confirm=true (conferma esplicita dall'utente).");
+        }
+        const config = await loadRuntimeConfig();
+        const result = await deleteListing(config, folder, { force });
+        const warning = result.was_published
+          ? ` Attenzione: la listing era 'published' (offer_id=${result.ebay_offer_id ?? "?"}, listing_id=${result.ebay_listing_id ?? "?"}): cartella locale rimossa ma la pubblicazione su eBay e' ancora attiva.`
+          : "";
+        return okResult(
+          {
+            slug: result.slug,
+            dir: result.dir,
+            was_published: result.was_published,
+            ebay_offer_id: result.ebay_offer_id,
+            ebay_listing_id: result.ebay_listing_id
+          },
+          `Listing ${result.slug} cancellata localmente.${warning}`
         );
       })
   );
