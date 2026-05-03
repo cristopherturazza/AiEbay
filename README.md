@@ -190,7 +190,12 @@ ToSell/
     intake.json       # report agent-friendly con dati mancanti e pricing suggestion
     ebay.json         # generato da build
     status.json       # stato listing
+  _inbox/             # staging temporaneo per upload da chat (es. Telegram)
+    <session_id>/
+      photos/         # foto in attesa di promozione a listing vera
 ```
+
+`_inbox/` viene usato dai tool `sellbot_inbox_add_photo` + `sellbot_listing_create_from_inbox`: i client che ricevono foto da chat (Telegram, ecc.) le piazzano lì senza dover sapere lo slug, poi la promozione genera lo slug dal titolo identificato via vision e rinomina la cartella in `<slug>/`. Le sessioni inbox abbandonate vengono purgate automaticamente dopo 24h.
 
 Per i libri puoi aggiungere nel `draft.json` anche dati logistici opzionali:
 
@@ -253,6 +258,7 @@ Il server MCP espone tool per:
 - auth OAuth a due step (`sellbot_auth_start`, `sellbot_auth_complete`, `sellbot_auth_status`)
 - ispezione listing (`sellbot_listings_list`, `sellbot_listing_get`, `sellbot_remote_listings_list`)
 - pipeline contenuti (`sellbot_scan`, `sellbot_listing_enrich`, `sellbot_listing_patch_draft`, `sellbot_listing_intake_check`, `sellbot_listing_build`, `sellbot_listing_prepare_for_publish`)
+- ingest da chat (`sellbot_inbox_add_photo`, `sellbot_listing_create_from_inbox`) — pensati per client tipo `tg-mcp-bot` che ricevono foto via Telegram
 - metadata/config (`sellbot_config_test`, `sellbot_category_suggest`, `sellbot_category_conditions`, `sellbot_shipping_services`)
 - sell flow (`sellbot_listing_preflight`, `sellbot_listing_publish`, `sellbot_listing_revise`)
 
