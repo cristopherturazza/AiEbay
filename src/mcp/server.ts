@@ -13,6 +13,11 @@ import { createAppOAuthClient } from "../ebay/oauth-client-factory.js";
 import { EbayMetadataClient } from "../ebay/metadata.js";
 import { EbayTaxonomyClient } from "../ebay/taxonomy.js";
 import { isSellbotError } from "../errors.js";
+import {
+  getInboxSession,
+  purgeStaleInboxSessions,
+  saveInboxPhoto
+} from "../fs/inbox.js";
 import { getToSellRoot, resolveListing, writeDraft, writeIntakeReport } from "../fs/listings.js";
 import { buildListingIntakeReport } from "../intake/index.js";
 import { logger } from "../logger.js";
@@ -20,6 +25,7 @@ import { completeUserAuth, getUserAuthStatus, startUserAuth } from "../services/
 import { readToken } from "../token/token-store.js";
 import { runConfigChecks } from "../services/config-check.js";
 import { patchListingDraft } from "../services/draft-patch.js";
+import { createListingFromInbox } from "../services/listing-create-from-inbox.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
 import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
@@ -687,6 +693,118 @@ export const createSellbotMcpServer = (): McpServer => {
           },
           "Condition policy letta"
         );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_inbox_add_photo",
+    {
+      title: "Inbox Add Photo",
+      description:
+        "Salva una foto in un'inbox temporanea (ToSell/_inbox/<session_id>/photos/) prima della creazione della listing. Pensato per client che ricevono immagini da chat (es. Telegram): non serve conoscere lo slug. Le inbox abbandonate vengono purgate automaticamente dopo 24h.",
+      inputSchema: {
+        bytes_base64: z.string().min(1).describe("Contenuto del file immagine codificato base64"),
+        mime: z
+          .string()
+          .min(1)
+          .describe("MIME type. Accettati: image/jpeg, image/png, image/heic (heif/jpg sono mappati)"),
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe(
+            "Identificatore della sessione di upload (default: 'default'). Per Telegram passa di solito chat_id."
+          ),
+        filename: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filename desiderato. Se omesso viene auto-generato (photo-<ts>.<ext>).")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ bytes_base64, mime, session_id, filename }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const toSellRoot = getToSellRoot(config.cwd);
+        const purge = await purgeStaleInboxSessions(toSellRoot);
+        if (purge.purged.length > 0) {
+          logger.info(`[inbox] purgate sessioni stale: ${purge.purged.join(", ")}`);
+        }
+
+        const session = getInboxSession(toSellRoot, session_id);
+        const result = await saveInboxPhoto(session, {
+          bytesBase64: bytes_base64,
+          mime,
+          filename
+        });
+
+        return okResult(
+          {
+            session_id: session.sessionId,
+            photo_path: result.photoPath,
+            filename: result.filename,
+            bytes: result.bytes,
+            total_photos: result.totalPhotos,
+            purged_sessions: purge.purged
+          },
+          `Foto salvata in inbox (${result.totalPhotos} totali per la sessione)`
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_create_from_inbox",
+    {
+      title: "Create Listing From Inbox",
+      description:
+        "Promuove le foto di un'inbox a una listing vera: identifica il titolo via vision (per moduli book/auto), genera lo slug dal titolo, sposta la cartella sotto ToSell/<slug>/ ed esegue enrichment. Restituisce snapshot e foto identificata come copertina. Se vision non identifica il libro e non passi title_override/slug_override fallisce con TITLE_REQUIRED esponendo i candidati.",
+      inputSchema: {
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe("Identificatore della sessione di upload (default: 'default')."),
+        module: z
+          .enum(["auto", "book", "generic"])
+          .optional()
+          .describe("Modulo enrichment. 'auto' = autodetect (default)."),
+        title_override: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Forza il titolo (lo slug verra' derivato da qui se slug_override non e' passato)."),
+        slug_override: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Forza lo slug della cartella (lowercase a-z, 0-9, trattini; salta vision se passato)."),
+        cover_filename: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filename della foto da usare come copertina (default: prima in ordine alfabetico)."),
+        hint: z
+          .string()
+          .optional()
+          .describe("Suggerimento testuale passato al modello vision (es. 'romanzo italiano anni '80').")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ session_id, module, title_override, slug_override, cover_filename, hint }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const result = await createListingFromInbox(config, {
+          sessionId: session_id,
+          module,
+          titleOverride: title_override,
+          slugOverride: slug_override,
+          coverFilename: cover_filename,
+          hint
+        });
+        return okResult(result, `Listing ${result.slug} creata dall'inbox`);
       })
   );
 

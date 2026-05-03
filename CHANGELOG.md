@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sellbot_inbox_add_photo` and `sellbot_listing_create_from_inbox` MCP tools
+  to support chat clients (e.g. `tg-mcp-bot`) that receive images from
+  Telegram. Photos land in `ToSell/_inbox/<session_id>/photos/` without the
+  client needing to know a slug; the create-from-inbox tool runs vision on the
+  cover, derives a slug from the identified title, renames the folder under
+  `ToSell/<slug>/` and runs enrichment. Stale inbox sessions older than 24h
+  are purged automatically. Includes `slugifyTitle` helper, MIME validation,
+  per-photo size cap (25 MB), and slug collision handling with numeric
+  suffixes.
+
 ### Fixed
 
 - Include consent URL in plain text in `sellbot_auth_start` MCP tool result so
