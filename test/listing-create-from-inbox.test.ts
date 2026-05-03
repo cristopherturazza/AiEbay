@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../src/config.js";
 import { getInboxSession, saveInboxPhoto } from "../src/fs/inbox.js";
+import { getRecentPromotion } from "../src/fs/inbox-state.js";
 import { getToSellRoot } from "../src/fs/listings.js";
 import { createListingFromInbox } from "../src/services/listing-create-from-inbox.js";
 
@@ -91,6 +92,24 @@ describe.sequential("createListingFromInbox", () => {
         slugOverride: "Bad Slug!"
       })
     ).rejects.toMatchObject({ code: "SLUG_INVALID" });
+  });
+
+  it("registra una recent_promotion per la sessione promossa", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    const session = getInboxSession(getToSellRoot(root), "tg-promo");
+    await saveInboxPhoto(session, { bytesBase64: oneByonePixelJpegBase64, mime: "image/jpeg" });
+
+    await createListingFromInbox(config, {
+      sessionId: "tg-promo",
+      module: "generic",
+      titleOverride: "Da Promuovere"
+    });
+
+    const lookup = await getRecentPromotion(getToSellRoot(root), "tg-promo");
+    expect(lookup).not.toBeNull();
+    expect(lookup?.promotion.slug).toBe("da-promuovere");
+    expect(lookup?.promotion.title).toBe("Da Promuovere");
   });
 
   it("risolve collisioni di slug con suffisso numerico", async () => {

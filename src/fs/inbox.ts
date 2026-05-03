@@ -105,20 +105,23 @@ const decodeBase64Photo = (bytesBase64: string): Buffer => {
   return buffer;
 };
 
-export interface SaveInboxPhotoInput {
+export interface SavePhotoInput {
   bytesBase64: string;
   mime: string;
   filename?: string;
 }
 
-export interface SaveInboxPhotoResult {
+export interface SavePhotoResult {
   photoPath: string;
   filename: string;
   bytes: number;
   totalPhotos: number;
 }
 
-const listInboxPhotoNames = async (photosDir: string): Promise<string[]> => {
+export type SaveInboxPhotoInput = SavePhotoInput;
+export type SaveInboxPhotoResult = SavePhotoResult;
+
+const listPhotoNames = async (photosDir: string): Promise<string[]> => {
   try {
     const entries = await readdir(photosDir, { withFileTypes: true });
     return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
@@ -142,18 +145,18 @@ const generateAutoFilename = (existing: string[], ext: string): string => {
   }
 };
 
-export const saveInboxPhoto = async (
-  session: InboxSessionPaths,
-  input: SaveInboxPhotoInput
-): Promise<SaveInboxPhotoResult> => {
+export const savePhotoToDir = async (
+  photosDir: string,
+  input: SavePhotoInput
+): Promise<SavePhotoResult> => {
   const ext = extensionFromMime(input.mime);
   const buffer = decodeBase64Photo(input.bytesBase64);
 
-  await mkdir(session.photosDir, { recursive: true });
-  const existing = await listInboxPhotoNames(session.photosDir);
+  await mkdir(photosDir, { recursive: true });
+  const existing = await listPhotoNames(photosDir);
 
   const filename = input.filename ? sanitizeFilename(input.filename, ext) : generateAutoFilename(existing, ext);
-  const photoPath = path.join(session.photosDir, filename);
+  const photoPath = path.join(photosDir, filename);
 
   await writeFile(photoPath, buffer);
 
@@ -165,6 +168,11 @@ export const saveInboxPhoto = async (
     totalPhotos: updated.length
   };
 };
+
+export const saveInboxPhoto = async (
+  session: InboxSessionPaths,
+  input: SavePhotoInput
+): Promise<SavePhotoResult> => savePhotoToDir(session.photosDir, input);
 
 export interface PurgeResult {
   purged: string[];
@@ -216,6 +224,73 @@ const directoryExists = async (candidate: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+export interface ClearInboxSessionResult {
+  sessionId: string;
+  dir: string;
+  existed: boolean;
+  removedPhotos: number;
+}
+
+export const clearInboxSession = async (
+  toSellRoot: string,
+  rawSessionId: string | undefined
+): Promise<ClearInboxSessionResult> => {
+  const session = getInboxSession(toSellRoot, rawSessionId);
+  let existed = false;
+  try {
+    const meta = await stat(session.dir);
+    existed = meta.isDirectory();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  let removedPhotos = 0;
+  if (existed) {
+    const photos = await listPhotoNames(session.photosDir);
+    removedPhotos = photos.length;
+    await rm(session.dir, { recursive: true, force: true });
+  }
+
+  return {
+    sessionId: session.sessionId,
+    dir: session.dir,
+    existed,
+    removedPhotos
+  };
+};
+
+export interface InboxSessionStatus {
+  sessionId: string;
+  dir: string;
+  exists: boolean;
+  photos: string[];
+}
+
+export const getInboxSessionStatus = async (
+  toSellRoot: string,
+  rawSessionId: string | undefined
+): Promise<InboxSessionStatus> => {
+  const session = getInboxSession(toSellRoot, rawSessionId);
+  let exists = false;
+  try {
+    const meta = await stat(session.dir);
+    exists = meta.isDirectory();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const photos = exists ? await listPhotoNames(session.photosDir) : [];
+  return {
+    sessionId: session.sessionId,
+    dir: session.dir,
+    exists,
+    photos: photos.sort((a, b) => a.localeCompare(b))
+  };
 };
 
 export interface PromoteInboxResult {

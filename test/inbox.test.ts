@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_SESSION_ID,
+  clearInboxSession,
   getInboxRoot,
   getInboxSession,
+  getInboxSessionStatus,
   promoteInboxToListing,
   purgeStaleInboxSessions,
   saveInboxPhoto,
@@ -142,6 +144,55 @@ describe("purgeStaleInboxSessions", () => {
     const root = await setupRoot();
     const result = await purgeStaleInboxSessions(getToSellRoot(root));
     expect(result.purged).toEqual([]);
+  });
+});
+
+describe("clearInboxSession", () => {
+  it("rimuove la cartella della sessione e conta le foto rimosse", async () => {
+    const root = await setupRoot();
+    const session = getInboxSession(getToSellRoot(root), "tg-clear");
+    await saveInboxPhoto(session, { bytesBase64: oneByonePixelJpegBase64, mime: "image/jpeg" });
+    await saveInboxPhoto(session, { bytesBase64: oneByonePixelJpegBase64, mime: "image/jpeg" });
+
+    const result = await clearInboxSession(getToSellRoot(root), "tg-clear");
+    expect(result.existed).toBe(true);
+    expect(result.removedPhotos).toBe(2);
+    expect(result.sessionId).toBe("tg-clear");
+  });
+
+  it("non fallisce se la sessione non esiste", async () => {
+    const root = await setupRoot();
+    const result = await clearInboxSession(getToSellRoot(root), "ghost");
+    expect(result.existed).toBe(false);
+    expect(result.removedPhotos).toBe(0);
+  });
+});
+
+describe("getInboxSessionStatus", () => {
+  it("ritorna lista foto ordinata e flag exists", async () => {
+    const root = await setupRoot();
+    const session = getInboxSession(getToSellRoot(root), "tg-status");
+    await saveInboxPhoto(session, {
+      bytesBase64: oneByonePixelJpegBase64,
+      mime: "image/jpeg",
+      filename: "b.jpg"
+    });
+    await saveInboxPhoto(session, {
+      bytesBase64: oneByonePixelJpegBase64,
+      mime: "image/jpeg",
+      filename: "a.jpg"
+    });
+
+    const status = await getInboxSessionStatus(getToSellRoot(root), "tg-status");
+    expect(status.exists).toBe(true);
+    expect(status.photos).toEqual(["a.jpg", "b.jpg"]);
+  });
+
+  it("ritorna exists=false e photos vuote per sessione mancante", async () => {
+    const root = await setupRoot();
+    const status = await getInboxSessionStatus(getToSellRoot(root), "missing");
+    expect(status.exists).toBe(false);
+    expect(status.photos).toEqual([]);
   });
 });
 
