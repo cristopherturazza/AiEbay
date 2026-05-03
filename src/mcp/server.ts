@@ -35,7 +35,12 @@ import { runConfigChecks } from "../services/config-check.js";
 import { patchListingDraft } from "../services/draft-patch.js";
 import { addPhotoToListing, adoptInboxPhotosToListing } from "../services/listing-add-photo.js";
 import { createListingFromInbox } from "../services/listing-create-from-inbox.js";
-import { deleteListing } from "../services/listing-delete.js";
+import {
+  DEFAULT_BULK_DELETE_STATES,
+  deleteListing,
+  deleteListingsBulk,
+  type DeletableState
+} from "../services/listing-delete.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
 import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
@@ -1059,14 +1064,67 @@ export const createSellbotMcpServer = (): McpServer => {
         const cleared = await clearInboxSession(toSellRoot, session_id);
         await clearRecentPromotion(toSellRoot, cleared.sessionId);
         const message = cleared.existed
-          ? `Inbox ${cleared.sessionId} cancellata (${cleared.removedPhotos} foto rimosse)`
-          : `Inbox ${cleared.sessionId} non esisteva: nessuna azione`;
+          ? `Inbox '${cleared.sessionId}' rimossa: ${cleared.removedPhotos} foto cancellate.`
+          : `Nessuna inbox da rimuovere per session_id='${cleared.sessionId}' (non era presente).`;
         return okResult(
           {
             session_id: cleared.sessionId,
             existed: cleared.existed,
             dir: cleared.dir,
             removed_photos: cleared.removedPhotos
+          },
+          message
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listings_delete_bulk",
+    {
+      title: "Delete Listings In Bulk",
+      description:
+        "Cancella in blocco le bozze locali sotto ToSell/. Di default tocca solo gli stati 'draft', 'ready', 'error': le listing 'published' vengono SEMPRE saltate salvo include_published=true (e anche in quel caso la pubblicazione su eBay non viene ritirata). Comodo per ripulire una sessione di prove. Ritorna gli slug cancellati e quelli saltati con motivo.",
+      inputSchema: {
+        confirm: z
+          .literal(true)
+          .describe("Conferma esplicita richiesta: passa true solo dopo conferma dall'utente."),
+        states: z
+          .array(z.enum(["draft", "ready", "error", "published"]))
+          .min(1)
+          .optional()
+          .describe(
+            "Stati da includere. Default: ['draft', 'ready', 'error']. Per cancellare anche le 'published' usa include_published=true."
+          ),
+        include_published: z
+          .boolean()
+          .optional()
+          .describe(
+            "Se true cancella anche le listing 'published' (la pubblicazione su eBay resta attiva)."
+          )
+      },
+      outputSchema: resultSchema
+    },
+    async ({ confirm, states, include_published }) =>
+      withTool(async () => {
+        if (confirm !== true) {
+          throw new Error("Per la cancellazione in blocco serve confirm=true (conferma esplicita dall'utente).");
+        }
+        const config = await loadRuntimeConfig();
+        const stateSet = states && states.length > 0
+          ? new Set<DeletableState>(states as DeletableState[])
+          : DEFAULT_BULK_DELETE_STATES;
+        const result = await deleteListingsBulk(config, {
+          states: stateSet,
+          includePublished: include_published
+        });
+        const message = `Cancellate ${result.deleted.length} bozze su ${result.total_scanned} totali (${result.skipped.length} saltate).`;
+        return okResult(
+          {
+            deleted: result.deleted,
+            skipped: result.skipped,
+            total_scanned: result.total_scanned,
+            states_used: Array.from(stateSet),
+            include_published: Boolean(include_published)
           },
           message
         );

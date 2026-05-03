@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../src/config.js";
 import { getToSellRoot } from "../src/fs/listings.js";
-import { deleteListing } from "../src/services/listing-delete.js";
+import { deleteListing, deleteListingsBulk } from "../src/services/listing-delete.js";
 
 const tempRoots: string[] = [];
 const originalCwd = process.cwd();
@@ -87,5 +87,79 @@ describe.sequential("deleteListing", () => {
     await expect(deleteListing(config, "ghost")).rejects.toMatchObject({
       code: "LISTING_NOT_FOUND"
     });
+  });
+
+  it("rifiuta '_inbox' come slug (LISTING_RESERVED)", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    await mkdir(path.join(getToSellRoot(root), "_inbox", "tg-1", "photos"), { recursive: true });
+
+    await expect(deleteListing(config, "_inbox")).rejects.toMatchObject({
+      code: "LISTING_RESERVED"
+    });
+    await expect(stat(path.join(getToSellRoot(root), "_inbox"))).resolves.toBeTruthy();
+  });
+});
+
+describe.sequential("deleteListingsBulk", () => {
+  it("cancella le bozze in stato draft/ready/error e salta published", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    await seedListing(root, "draft-1", "draft");
+    await seedListing(root, "ready-1", "ready");
+    await seedListing(root, "error-1", "error");
+    await seedListing(root, "live-1", "published");
+    await mkdir(path.join(getToSellRoot(root), "_inbox", "tg-1", "photos"), { recursive: true });
+
+    const result = await deleteListingsBulk(config);
+    expect(result.deleted.map((entry) => entry.slug).sort()).toEqual([
+      "draft-1",
+      "error-1",
+      "ready-1"
+    ]);
+    expect(result.skipped).toEqual([
+      { slug: "live-1", state: "published", reason: "published_protected" }
+    ]);
+    expect(result.total_scanned).toBe(4);
+
+    await expect(stat(path.join(getToSellRoot(root), "draft-1"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(path.join(getToSellRoot(root), "live-1"))).resolves.toBeTruthy();
+    await expect(stat(path.join(getToSellRoot(root), "_inbox"))).resolves.toBeTruthy();
+  });
+
+  it("include published se include_published=true", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    await seedListing(root, "draft-1", "draft");
+    await seedListing(root, "live-1", "published");
+
+    const result = await deleteListingsBulk(config, { includePublished: true });
+    expect(result.deleted.map((entry) => entry.slug).sort()).toEqual(["draft-1", "live-1"]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("rispetta states custom", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    await seedListing(root, "draft-1", "draft");
+    await seedListing(root, "ready-1", "ready");
+
+    const result = await deleteListingsBulk(config, { states: new Set(["draft"]) });
+    expect(result.deleted.map((entry) => entry.slug)).toEqual(["draft-1"]);
+    expect(result.skipped).toEqual([
+      { slug: "ready-1", state: "ready", reason: "state_excluded" }
+    ]);
+  });
+
+  it("ritorna deleted vuoto se non ci sono bozze idonee", async () => {
+    const root = await setupRoot();
+    const config = await loadRuntimeConfig(root);
+    await seedListing(root, "live-1", "published");
+
+    const result = await deleteListingsBulk(config);
+    expect(result.deleted).toEqual([]);
+    expect(result.skipped).toEqual([
+      { slug: "live-1", state: "published", reason: "published_protected" }
+    ]);
   });
 });

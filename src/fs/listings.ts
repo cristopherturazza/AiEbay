@@ -11,6 +11,9 @@ import {
 } from "../schemas/index.js";
 import type { Draft, EbayBuild, EnrichmentReport, IntakeReport, Status } from "../types.js";
 import { readJsonFile, writeJsonFile } from "../utils/json.js";
+import { slugifyTitle } from "../utils/slug.js";
+
+export const RESERVED_LISTING_NAMES = new Set(["_inbox"]);
 
 export interface ListingPaths {
   slug: string;
@@ -71,6 +74,7 @@ export const listListingFolders = async (rootPath: string): Promise<ListingPaths
 
   return entries
     .filter((entry) => entry.isDirectory())
+    .filter((entry) => !RESERVED_LISTING_NAMES.has(entry.name))
     .map((entry) => listingFromDir(path.join(rootPath, entry.name)))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 };
@@ -208,12 +212,36 @@ const directoryExists = async (candidate: string): Promise<boolean> => {
   }
 };
 
+const isReservedBasename = (candidate: string): boolean =>
+  RESERVED_LISTING_NAMES.has(path.basename(candidate));
+
 export const resolveListing = async (rootPath: string, input: string): Promise<ListingPaths> => {
-  const asGiven = path.resolve(process.cwd(), input);
-  const inRoot = path.resolve(rootPath, input);
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    throw new SellbotError("LISTING_NOT_FOUND", "Slug vuoto: indica una cartella valida.");
+  }
+
+  if (RESERVED_LISTING_NAMES.has(trimmed)) {
+    throw new SellbotError(
+      "LISTING_RESERVED",
+      `'${trimmed}' è una cartella di sistema (non una listing). Usa sellbot_inbox_clear per le sessioni inbox.`
+    );
+  }
+
+  const asGiven = path.resolve(process.cwd(), trimmed);
+  const inRoot = path.resolve(rootPath, trimmed);
+  const slugified = slugifyTitle(trimmed);
+  const inRootSlug = slugified.length > 0 ? path.resolve(rootPath, slugified) : null;
+
   const candidates = [asGiven, inRoot];
+  if (inRootSlug && inRootSlug !== inRoot) {
+    candidates.push(inRootSlug);
+  }
 
   for (const candidate of candidates) {
+    if (isReservedBasename(candidate)) {
+      continue;
+    }
     if (await directoryExists(candidate)) {
       return listingFromDir(candidate);
     }
