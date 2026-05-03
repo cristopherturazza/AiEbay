@@ -2,7 +2,13 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getToSellRoot, listListingFolders, listPhotoFiles, readDraft } from "../src/fs/listings.js";
+import {
+  getToSellRoot,
+  listListingFolders,
+  listPhotoFiles,
+  readDraft,
+  resolveListing
+} from "../src/fs/listings.js";
 
 const temporaryRoots: string[] = [];
 
@@ -24,6 +30,47 @@ describe("listings filesystem", () => {
     const listings = await listListingFolders(toSellPath);
 
     expect(listings.map((entry) => entry.slug)).toEqual(["item-a", "item-b"]);
+  });
+
+  it("esclude la cartella riservata _inbox dalle listing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sellbot-test-"));
+    temporaryRoots.push(root);
+
+    const toSellPath = getToSellRoot(root);
+    await mkdir(path.join(toSellPath, "item-a", "photos"), { recursive: true });
+    await mkdir(path.join(toSellPath, "_inbox", "tg-1", "photos"), { recursive: true });
+
+    const listings = await listListingFolders(toSellPath);
+    expect(listings.map((entry) => entry.slug)).toEqual(["item-a"]);
+  });
+
+  it("resolveListing trova la listing tramite slug normalizzato", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sellbot-test-"));
+    temporaryRoots.push(root);
+
+    const toSellPath = getToSellRoot(root);
+    await mkdir(path.join(toSellPath, "elois-darcy-non-specificato"), { recursive: true });
+
+    const fromUnicodeHyphens = await resolveListing(
+      toSellPath,
+      "Elois‑Darcy‑Non‑Specificato"
+    );
+    expect(fromUnicodeHyphens.slug).toBe("elois-darcy-non-specificato");
+
+    const fromMixedCase = await resolveListing(toSellPath, "Elois Darcy Non Specificato");
+    expect(fromMixedCase.slug).toBe("elois-darcy-non-specificato");
+  });
+
+  it("resolveListing rifiuta la cartella riservata _inbox", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sellbot-test-"));
+    temporaryRoots.push(root);
+
+    const toSellPath = getToSellRoot(root);
+    await mkdir(path.join(toSellPath, "_inbox"), { recursive: true });
+
+    await expect(resolveListing(toSellPath, "_inbox")).rejects.toMatchObject({
+      code: "LISTING_RESERVED"
+    });
   });
 
   it("considera solo immagini jpg/jpeg/png/heic", async () => {
