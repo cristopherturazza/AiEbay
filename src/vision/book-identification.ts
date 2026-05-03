@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { logger } from "../logger.js";
-import { callOllamaChat, type OllamaChatOptions } from "./ollama-client.js";
+import { callOllamaChat } from "./ollama-client.js";
+import { callOpenRouterVision } from "./openrouter-client.js";
 
 export type BookMatchLevel = "none" | "low" | "medium" | "high";
 
@@ -21,14 +22,29 @@ export interface BookIdentificationResult {
   reason?: string;
 }
 
+export type VisionBackend =
+  | {
+      kind: "ollama";
+      baseUrl: string;
+      model: string;
+      keepAlive: string;
+      timeoutMs?: number;
+    }
+  | {
+      kind: "openrouter";
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      timeoutMs?: number;
+      httpReferer?: string;
+      xTitle?: string;
+    };
+
 export interface IdentifyBookFromPhotoOptions {
   photoPath: string;
-  baseUrl: string;
-  model: string;
-  keepAlive: string;
-  timeoutMs?: number;
+  backend: VisionBackend;
   hint?: string;
-  fetchImpl?: OllamaChatOptions["fetchImpl"];
+  fetchImpl?: typeof fetch;
 }
 
 const PROMPT = `Sei un assistente esperto di identificazione libri dalla foto di copertina.
@@ -171,6 +187,76 @@ const emptyResult = (
   reason
 });
 
+const guessMimeFromPath = (filePath: string): string => {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".heic":
+    case ".heif":
+      return "image/heic";
+    case ".gif":
+      return "image/gif";
+    default:
+      return "image/jpeg";
+  }
+};
+
+interface ModelCallResult {
+  content: string;
+  modelLabel: string;
+}
+
+const runOllama = async (
+  backend: Extract<VisionBackend, { kind: "ollama" }>,
+  prompt: string,
+  imageBase64: string,
+  fetchImpl: typeof fetch | undefined
+): Promise<ModelCallResult> => {
+  const result = await callOllamaChat({
+    baseUrl: backend.baseUrl,
+    model: backend.model,
+    keepAlive: backend.keepAlive,
+    format: "json",
+    timeoutMs: backend.timeoutMs,
+    fetchImpl,
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+        images: [imageBase64]
+      }
+    ]
+  });
+
+  return { content: result.content, modelLabel: result.model };
+};
+
+const runOpenRouter = async (
+  backend: Extract<VisionBackend, { kind: "openrouter" }>,
+  prompt: string,
+  imageBase64: string,
+  imageMime: string,
+  fetchImpl: typeof fetch | undefined
+): Promise<ModelCallResult> => {
+  const result = await callOpenRouterVision({
+    baseUrl: backend.baseUrl,
+    apiKey: backend.apiKey,
+    model: backend.model,
+    prompt,
+    imageBase64,
+    imageMime,
+    timeoutMs: backend.timeoutMs,
+    fetchImpl,
+    httpReferer: backend.httpReferer,
+    xTitle: backend.xTitle
+  });
+
+  return { content: result.content, modelLabel: result.model };
+};
+
 export const identifyBookFromPhoto = async (
   options: IdentifyBookFromPhotoOptions
 ): Promise<BookIdentificationResult> => {
@@ -179,6 +265,8 @@ export const identifyBookFromPhoto = async (
     : path.resolve(process.cwd(), options.photoPath);
 
   const started = Date.now();
+  const backend = options.backend;
+  const declaredModel = backend.model;
 
   let base64: string;
   try {
@@ -188,44 +276,34 @@ export const identifyBookFromPhoto = async (
     const elapsed = Date.now() - started;
     const reason = error instanceof Error ? error.message : String(error);
     logger.warn(`[vision] book.identify lettura foto fallita path=${absolute}: ${reason}`);
-    return emptyResult(elapsed, options.model, `photo_read_error: ${reason}`);
+    return emptyResult(elapsed, declaredModel, `photo_read_error: ${reason}`);
   }
 
-  const userContent = options.hint ? `${PROMPT}\n\nSuggerimento dell'utente: ${options.hint}` : PROMPT;
+  const prompt = options.hint ? `${PROMPT}\n\nSuggerimento dell'utente: ${options.hint}` : PROMPT;
 
   try {
-    const result = await callOllamaChat({
-      baseUrl: options.baseUrl,
-      model: options.model,
-      keepAlive: options.keepAlive,
-      format: "json",
-      timeoutMs: options.timeoutMs,
-      fetchImpl: options.fetchImpl,
-      messages: [
-        {
-          role: "user",
-          content: userContent,
-          images: [base64]
-        }
-      ]
-    });
+    const { content, modelLabel } =
+      backend.kind === "ollama"
+        ? await runOllama(backend, prompt, base64, options.fetchImpl)
+        : await runOpenRouter(backend, prompt, base64, guessMimeFromPath(absolute), options.fetchImpl);
 
     const elapsed = Date.now() - started;
-    const totalDuration = result.totalDurationMs !== undefined ? result.totalDurationMs.toFixed(0) : "n/a";
     logger.info(
-      `[vision] book.identify ok model=${result.model} elapsed_ms=${elapsed} total_duration_ms=${totalDuration}`
+      `[vision] book.identify ok provider=${backend.kind} model=${modelLabel} elapsed_ms=${elapsed}`
     );
 
-    const parsed = extractJsonPayload(result.content);
+    const parsed = extractJsonPayload(content);
     if (parsed === undefined) {
-      return emptyResult(elapsed, result.model, "invalid_json_from_model");
+      return emptyResult(elapsed, modelLabel, "invalid_json_from_model");
     }
 
-    return normalizeResponse(parsed, elapsed, result.model);
+    return normalizeResponse(parsed, elapsed, modelLabel);
   } catch (error) {
     const elapsed = Date.now() - started;
     const reason = error instanceof Error ? error.message : String(error);
-    logger.warn(`[vision] book.identify errore elapsed_ms=${elapsed} model=${options.model}: ${reason}`);
-    return emptyResult(elapsed, options.model, `vision_error: ${reason}`);
+    logger.warn(
+      `[vision] book.identify errore provider=${backend.kind} elapsed_ms=${elapsed} model=${declaredModel}: ${reason}`
+    );
+    return emptyResult(elapsed, declaredModel, `vision_error: ${reason}`);
   }
 };

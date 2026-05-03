@@ -11,10 +11,10 @@ afterEach(async () => {
   temporaryRoots.length = 0;
 });
 
-const createFakePhoto = async (): Promise<string> => {
+const createFakePhoto = async (filename = "cover.jpg"): Promise<string> => {
   const root = await mkdtemp(path.join(os.tmpdir(), "mastrota-vision-"));
   temporaryRoots.push(root);
-  const photoPath = path.join(root, "cover.jpg");
+  const photoPath = path.join(root, filename);
   await writeFile(photoPath, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]));
   return photoPath;
 };
@@ -25,7 +25,25 @@ const okResponse = (payload: unknown) =>
     headers: { "Content-Type": "application/json" }
   });
 
-describe("book vision identification", () => {
+const ollamaBackend = {
+  kind: "ollama" as const,
+  baseUrl: "http://127.0.0.1:11434",
+  model: "gemma4:e4b",
+  keepAlive: "60s",
+  timeoutMs: 5_000
+};
+
+const openrouterBackend = {
+  kind: "openrouter" as const,
+  baseUrl: "https://openrouter.ai/api/v1",
+  apiKey: "or-test-key",
+  model: "openai/gpt-4o-mini",
+  timeoutMs: 5_000,
+  httpReferer: "https://example.test",
+  xTitle: "Mastrota Test"
+};
+
+describe("book vision identification (ollama)", () => {
   it("normalizza la risposta Ollama e filtra gli ISBN non validi", async () => {
     const photoPath = await createFakePhoto();
     const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -65,10 +83,7 @@ describe("book vision identification", () => {
 
     const result = await identifyBookFromPhoto({
       photoPath,
-      baseUrl: "http://127.0.0.1:11434",
-      model: "gemma4:e4b",
-      keepAlive: "60s",
-      timeoutMs: 5_000,
+      backend: ollamaBackend,
       fetchImpl: fakeFetch
     });
 
@@ -112,9 +127,7 @@ describe("book vision identification", () => {
 
     const result = await identifyBookFromPhoto({
       photoPath,
-      baseUrl: "http://127.0.0.1:11434",
-      model: "gemma4:e4b",
-      keepAlive: "60s",
+      backend: ollamaBackend,
       fetchImpl: fakeFetch
     });
 
@@ -132,9 +145,7 @@ describe("book vision identification", () => {
 
     const result = await identifyBookFromPhoto({
       photoPath,
-      baseUrl: "http://127.0.0.1:11434",
-      model: "gemma4:e4b",
-      keepAlive: "60s",
+      backend: ollamaBackend,
       fetchImpl: fakeFetch
     });
 
@@ -158,9 +169,7 @@ describe("book vision identification", () => {
 
     const result = await identifyBookFromPhoto({
       photoPath,
-      baseUrl: "http://127.0.0.1:11434",
-      model: "gemma4:e4b",
-      keepAlive: "60s",
+      backend: ollamaBackend,
       fetchImpl: fakeFetch
     });
 
@@ -172,9 +181,7 @@ describe("book vision identification", () => {
   it("segnala errore se il path immagine non esiste", async () => {
     const result = await identifyBookFromPhoto({
       photoPath: path.join(os.tmpdir(), "nonexistent-book-cover-xyz.jpg"),
-      baseUrl: "http://127.0.0.1:11434",
-      model: "gemma4:e4b",
-      keepAlive: "60s",
+      backend: ollamaBackend,
       fetchImpl: (async () => {
         throw new Error("fetch should not be called");
       }) as typeof fetch
@@ -183,5 +190,86 @@ describe("book vision identification", () => {
     expect(result.match).toBe("none");
     expect(result.candidates).toEqual([]);
     expect(result.reason).toContain("photo_read_error");
+  });
+});
+
+describe("book vision identification (openrouter)", () => {
+  it("invia data URL con MIME, headers di OpenRouter e response_format json", async () => {
+    const photoPath = await createFakePhoto("cover.png");
+    const fetchCalls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
+
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      fetchCalls.push({ url, headers, body: JSON.parse(rawBody) });
+
+      return okResponse({
+        model: "openai/gpt-4o-mini-2024-07-18",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                match: "high",
+                candidates: [
+                  { title: "Il Nome della Rosa", author: "Umberto Eco", confidence: "high" }
+                ]
+              })
+            }
+          }
+        ]
+      });
+    }) as typeof fetch;
+
+    const result = await identifyBookFromPhoto({
+      photoPath,
+      backend: openrouterBackend,
+      hint: "romanzo italiano",
+      fetchImpl: fakeFetch
+    });
+
+    expect(result.match).toBe("high");
+    expect(result.candidates[0]?.title).toBe("Il Nome della Rosa");
+    expect(result.model).toBe("openai/gpt-4o-mini-2024-07-18");
+
+    expect(fetchCalls).toHaveLength(1);
+    const sent = fetchCalls[0];
+    expect(sent.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(sent.headers["Authorization"]).toBe("Bearer or-test-key");
+    expect(sent.headers["HTTP-Referer"]).toBe("https://example.test");
+    expect(sent.headers["X-Title"]).toBe("Mastrota Test");
+    expect(sent.body.model).toBe("openai/gpt-4o-mini");
+    expect(sent.body.response_format).toMatchObject({ type: "json_object" });
+
+    const messages = sent.body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(messages[0].content[0]).toMatchObject({ type: "text" });
+    expect(messages[0].content[1]).toMatchObject({ type: "image_url" });
+    const imagePart = messages[0].content[1] as { image_url: { url: string } };
+    expect(imagePart.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
+
+    const promptText = (messages[0].content[0] as { text: string }).text;
+    expect(promptText).toContain("Suggerimento dell'utente: romanzo italiano");
+  });
+
+  it("fallback a match=none quando OpenRouter ritorna 4xx", async () => {
+    const photoPath = await createFakePhoto();
+
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ error: { message: "auth required" } }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      })) as typeof fetch;
+
+    const result = await identifyBookFromPhoto({
+      photoPath,
+      backend: openrouterBackend,
+      fetchImpl: fakeFetch
+    });
+
+    expect(result.match).toBe("none");
+    expect(result.candidates).toEqual([]);
+    expect(result.reason).toContain("vision_error");
+    expect(result.reason).toContain("OpenRouter 401");
   });
 });

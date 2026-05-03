@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { z } from "zod";
 import { SellbotError } from "./errors.js";
 import { defaultEbayBaseUrls, type EbayEnvironment } from "./ebay/urls.js";
+import type { VisionBackend } from "./vision/book-identification.js";
 
 const emptyToUndefined = (value: unknown): unknown => {
   if (typeof value !== "string") {
@@ -52,7 +53,14 @@ const envSchema = z.object({
   MASTROTA_OLLAMA_BASE_URL: optionalUrl(),
   MASTROTA_OLLAMA_VISION_MODEL: optionalString(),
   MASTROTA_OLLAMA_VISION_KEEP_ALIVE: optionalString(),
-  MASTROTA_OLLAMA_VISION_TIMEOUT_MS: z.coerce.number().int().positive().optional()
+  MASTROTA_OLLAMA_VISION_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  MASTROTA_VISION_PROVIDER: z.preprocess(emptyToUndefined, z.enum(["ollama", "openrouter"]).optional()),
+  MASTROTA_OPENROUTER_API_KEY: optionalString(),
+  MASTROTA_OPENROUTER_BASE_URL: optionalUrl(),
+  MASTROTA_OPENROUTER_VISION_MODEL: optionalString(),
+  MASTROTA_OPENROUTER_VISION_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  MASTROTA_OPENROUTER_HTTP_REFERER: optionalUrl(),
+  MASTROTA_OPENROUTER_X_TITLE: optionalString()
 });
 
 const projectConfigSchema = z.object({
@@ -94,8 +102,10 @@ export interface RuntimeConfig {
     paymentPolicyId?: string;
     returnPolicyId?: string;
   };
-  ollama: OllamaVisionConfig;
+  vision: VisionConfig;
 }
+
+export type VisionProvider = "ollama" | "openrouter";
 
 export interface OllamaVisionConfig {
   baseUrl: string;
@@ -104,11 +114,32 @@ export interface OllamaVisionConfig {
   visionTimeoutMs: number;
 }
 
+export interface OpenRouterVisionConfig {
+  baseUrl: string;
+  apiKey?: string;
+  visionModel: string;
+  visionTimeoutMs: number;
+  httpReferer?: string;
+  xTitle?: string;
+}
+
+export interface VisionConfig {
+  provider: VisionProvider;
+  ollama: OllamaVisionConfig;
+  openrouter: OpenRouterVisionConfig;
+}
+
 export const DEFAULT_OLLAMA_VISION_CONFIG: OllamaVisionConfig = {
   baseUrl: "http://127.0.0.1:11434",
   visionModel: "gemma4:e4b",
   visionKeepAlive: "60s",
   visionTimeoutMs: 120_000
+};
+
+export const DEFAULT_OPENROUTER_VISION_CONFIG: OpenRouterVisionConfig = {
+  baseUrl: "https://openrouter.ai/api/v1",
+  visionModel: "openai/gpt-4o-mini",
+  visionTimeoutMs: 60_000
 };
 
 export interface MoneyAmount {
@@ -339,14 +370,56 @@ export const loadRuntimeConfig = async (cwd = process.cwd()): Promise<RuntimeCon
       paymentPolicyId: projectConfig.policies?.paymentPolicyId,
       returnPolicyId: projectConfig.policies?.returnPolicyId
     },
-    ollama: {
-      baseUrl: env.MASTROTA_OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_VISION_CONFIG.baseUrl,
-      visionModel: env.MASTROTA_OLLAMA_VISION_MODEL ?? DEFAULT_OLLAMA_VISION_CONFIG.visionModel,
-      visionKeepAlive: env.MASTROTA_OLLAMA_VISION_KEEP_ALIVE ?? DEFAULT_OLLAMA_VISION_CONFIG.visionKeepAlive,
-      visionTimeoutMs: env.MASTROTA_OLLAMA_VISION_TIMEOUT_MS ?? DEFAULT_OLLAMA_VISION_CONFIG.visionTimeoutMs
+    vision: {
+      provider: env.MASTROTA_VISION_PROVIDER ?? "ollama",
+      ollama: {
+        baseUrl: env.MASTROTA_OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_VISION_CONFIG.baseUrl,
+        visionModel: env.MASTROTA_OLLAMA_VISION_MODEL ?? DEFAULT_OLLAMA_VISION_CONFIG.visionModel,
+        visionKeepAlive: env.MASTROTA_OLLAMA_VISION_KEEP_ALIVE ?? DEFAULT_OLLAMA_VISION_CONFIG.visionKeepAlive,
+        visionTimeoutMs: env.MASTROTA_OLLAMA_VISION_TIMEOUT_MS ?? DEFAULT_OLLAMA_VISION_CONFIG.visionTimeoutMs
+      },
+      openrouter: {
+        baseUrl: env.MASTROTA_OPENROUTER_BASE_URL ?? DEFAULT_OPENROUTER_VISION_CONFIG.baseUrl,
+        apiKey: env.MASTROTA_OPENROUTER_API_KEY,
+        visionModel: env.MASTROTA_OPENROUTER_VISION_MODEL ?? DEFAULT_OPENROUTER_VISION_CONFIG.visionModel,
+        visionTimeoutMs:
+          env.MASTROTA_OPENROUTER_VISION_TIMEOUT_MS ?? DEFAULT_OPENROUTER_VISION_CONFIG.visionTimeoutMs,
+        httpReferer: env.MASTROTA_OPENROUTER_HTTP_REFERER,
+        xTitle: env.MASTROTA_OPENROUTER_X_TITLE
+      }
     }
   };
 };
+
+export const resolveVisionBackend = (vision: VisionConfig): VisionBackend => {
+  if (vision.provider === "openrouter") {
+    if (!vision.openrouter.apiKey) {
+      throw new SellbotError(
+        "ENV_MISSING",
+        `MASTROTA_OPENROUTER_API_KEY mancante: richiesta quando MASTROTA_VISION_PROVIDER=openrouter (${ENV_DESCRIPTION})`
+      );
+    }
+    return {
+      kind: "openrouter",
+      baseUrl: vision.openrouter.baseUrl,
+      apiKey: vision.openrouter.apiKey,
+      model: vision.openrouter.visionModel,
+      timeoutMs: vision.openrouter.visionTimeoutMs,
+      httpReferer: vision.openrouter.httpReferer,
+      xTitle: vision.openrouter.xTitle
+    };
+  }
+  return {
+    kind: "ollama",
+    baseUrl: vision.ollama.baseUrl,
+    model: vision.ollama.visionModel,
+    keepAlive: vision.ollama.visionKeepAlive,
+    timeoutMs: vision.ollama.visionTimeoutMs
+  };
+};
+
+export const visionModelLabel = (vision: VisionConfig): string =>
+  vision.provider === "openrouter" ? vision.openrouter.visionModel : vision.ollama.visionModel;
 
 export const requireNotificationConfig = (config: RuntimeConfig): {
   endpointUrl: string;

@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runEnrich } from "../commands/enrich.js";
-import type { RuntimeConfig } from "../config.js";
+import { resolveVisionBackend, visionModelLabel, type RuntimeConfig } from "../config.js";
 import { SellbotError } from "../errors.js";
 import { getInboxSession, promoteInboxToListing } from "../fs/inbox.js";
 import { getToSellRoot, listPhotoFiles } from "../fs/listings.js";
@@ -65,16 +65,14 @@ const tryIdentify = async (
   ordered: string[],
   hint: string | undefined
 ): Promise<VisionAttemptResult | null> => {
+  const backend = resolveVisionBackend(config.vision);
   let attempts = 0;
   for (const filename of ordered) {
     attempts += 1;
     const photoPath = path.join(photosDir, filename);
     const result = await identifyBookFromPhoto({
       photoPath,
-      baseUrl: config.ollama.baseUrl,
-      model: config.ollama.visionModel,
-      keepAlive: config.ollama.visionKeepAlive,
-      timeoutMs: config.ollama.visionTimeoutMs,
+      backend,
       hint
     });
 
@@ -147,7 +145,7 @@ export const createListingFromInbox = async (
         candidates: [],
         match: "none",
         elapsed_ms: 0,
-        model: config.ollama.visionModel,
+        model: visionModelLabel(config.vision),
         fallback_attempts: ordered.length
       };
     }
