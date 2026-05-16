@@ -4,6 +4,10 @@ import { getToSellRoot, readDraft, resolveListing, writeDraft } from "../fs/list
 import { buildPriceTriple } from "../enrichment/shared.js";
 import type { Draft } from "../types.js";
 
+export const ITEM_SPECIFICS_MULTI_VALUE_SEPARATOR = " | ";
+
+export type ItemSpecificsPatchValue = string | string[];
+
 export interface DraftPatchInput {
   title?: string;
   description?: string;
@@ -17,18 +21,37 @@ export interface DraftPatchInput {
   recalculatePriceLadder?: boolean;
   shipping?: Partial<NonNullable<Draft["shipping"]>>;
   clearShipping?: boolean;
-  itemSpecificsSet?: Record<string, string>;
+  /**
+   * Item specifics to set. Values can be a single string or an array of strings;
+   * arrays are joined with " | " for storage so legacy single-value readers still
+   * work, while the publish pipeline splits them back into proper eBay aspects[].
+   */
+  itemSpecificsSet?: Record<string, ItemSpecificsPatchValue>;
   itemSpecificsRemove?: string[];
 }
 
-const normalizeStringRecord = (value: Record<string, string> | undefined): Record<string, string> | undefined => {
+const flattenSpecificValue = (raw: ItemSpecificsPatchValue): string => {
+  if (Array.isArray(raw)) {
+    const cleaned = raw
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+
+    return cleaned.join(ITEM_SPECIFICS_MULTI_VALUE_SEPARATOR);
+  }
+
+  return raw.trim();
+};
+
+const normalizeStringRecord = (
+  value: Record<string, ItemSpecificsPatchValue> | undefined
+): Record<string, string> | undefined => {
   if (!value) {
     return undefined;
   }
 
   const normalized = Object.entries(value).reduce<Record<string, string>>((acc, [rawKey, rawValue]) => {
     const key = rawKey.trim();
-    const nextValue = rawValue.trim();
+    const nextValue = flattenSpecificValue(rawValue);
 
     if (!key || !nextValue) {
       return acc;

@@ -320,4 +320,32 @@ export class EbayInventoryClient {
       json: payload
     });
   }
+
+  // withdrawOffer (docs):
+  // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/withdrawOffer
+  async withdrawOffer(accessToken: string, offerId: string, locale: string): Promise<void> {
+    await this.httpClient.requestVoid({
+      method: "POST",
+      url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/withdraw`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
+        "Content-Language": locale
+      }
+    });
+  }
+
+  // deleteOffer (docs):
+  // https://developer.ebay.com/api-docs/sell/inventory/resources/offer/methods/deleteOffer
+  async deleteOffer(accessToken: string, offerId: string, locale: string): Promise<void> {
+    await this.httpClient.requestVoid({
+      method: "DELETE",
+      url: `${this.options.apiBaseUrl}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Accept-Language": locale,
+        "Content-Language": locale
+      }
+    });
+  }
 }
