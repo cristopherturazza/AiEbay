@@ -41,6 +41,8 @@ import {
   deleteListingsBulk,
   type DeletableState
 } from "../services/listing-delete.js";
+import { endListingOnEbay } from "../services/listing-end-on-ebay.js";
+import { resolveListings } from "../services/listing-resolve.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
 import { listRemoteListings } from "../services/remote-listings.js";
 import { runPublishPreflightChecks } from "../services/publish-preflight.js";
@@ -70,25 +72,67 @@ const okResult = (data: unknown, message?: string, textOverride?: string) => ({
   }
 });
 
+const AUTH_ERROR_CODES = new Set([
+  "AUTH_PENDING_MISSING",
+  "AUTH_PENDING_INVALID",
+  "AUTH_SESSION_EXPIRED",
+  "AUTH_SESSION_ERROR",
+  "OAUTH_STATE",
+  "OAUTH_DENIED",
+  "OAUTH_CODE_MISSING",
+  "OAUTH_ERROR",
+  "TOKEN_MISSING",
+  "TOKEN_REFRESH_FAILED",
+  "TOKEN_REFRESH_REQUIRED",
+  "TOKEN_INVALID",
+  "EBAY_AUTH_REQUIRED"
+]);
+
+const RETRYABLE_ERROR_CODES = new Set([
+  "EBAY_API_TIMEOUT",
+  "EBAY_API_RATE_LIMIT",
+  "EBAY_API_SERVER_ERROR",
+  "HTTP_TIMEOUT",
+  "NETWORK_ERROR"
+]);
+
+interface ErrorPayload {
+  ok: false;
+  code: string;
+  message: string;
+  details?: unknown;
+  requires_auth: boolean;
+  retryable: boolean;
+  hint?: string;
+}
+
+const buildErrorPayload = (code: string, message: string, details?: unknown): ErrorPayload => {
+  const requiresAuth = AUTH_ERROR_CODES.has(code) || /OAUTH|TOKEN|AUTH/i.test(code);
+  const retryable = RETRYABLE_ERROR_CODES.has(code);
+
+  const hint = requiresAuth
+    ? "Chiama sellbot_auth_ensure (oppure sellbot_auth_status + sellbot_auth_start) per ripristinare l'autenticazione utente eBay prima di riprovare."
+    : retryable
+      ? "Errore transitorio: si puo' ritentare la chiamata dopo un breve backoff."
+      : undefined;
+
+  return {
+    ok: false,
+    code,
+    message,
+    details,
+    requires_auth: requiresAuth,
+    retryable,
+    ...(hint ? { hint } : {})
+  };
+};
+
 const errorResult = (error: unknown) => {
-  const payload = isSellbotError(error)
-    ? {
-        ok: false,
-        code: error.code,
-        message: error.message,
-        details: error.details
-      }
+  const payload: ErrorPayload = isSellbotError(error)
+    ? buildErrorPayload(error.code, error.message, error.details)
     : error instanceof Error
-      ? {
-          ok: false,
-          code: "UNHANDLED_ERROR",
-          message: error.message
-        }
-      : {
-          ok: false,
-          code: "UNHANDLED_ERROR",
-          message: String(error)
-        };
+      ? buildErrorPayload("UNHANDLED_ERROR", error.message)
+      : buildErrorPayload("UNHANDLED_ERROR", String(error));
 
   return {
     isError: true,
@@ -270,6 +314,87 @@ export const createSellbotMcpServer = (): McpServer => {
   );
 
   server.registerTool(
+    "sellbot_auth_ensure",
+    {
+      title: "Auth Ensure",
+      description:
+        "Tool 'all-in-one' per agenti: garantisce che ci sia un token utente valido. Se gia' autenticato → ritorna state='authenticated'. Se c'e' una sessione OAuth pendente non scaduta → riusa il consentUrl esistente (reused=true). Altrimenti → avvia un nuovo flusso OAuth e ritorna un consentUrl da aprire nel browser. Se la configurazione OAuth e' incompleta → ritorna state='not_configured' con la lista delle env mancanti. Usalo PRIMA di ogni tool che parla con eBay (publish/revise/end/remote_listings/prepare_for_publish): elimina il giro a tre tool (status→start→consent).",
+      outputSchema: resultSchema
+    },
+    async () =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const status = await getUserAuthStatus(config);
+
+        if (status.state === "authenticated") {
+          return okResult(
+            {
+              state: "authenticated" as const,
+              env: status.env,
+              token: {
+                expires_at: status.tokenExpiresAt ?? null,
+                scopes: status.scopes ?? []
+              },
+              action_required: false
+            },
+            "Token utente eBay valido"
+          );
+        }
+
+        if (status.state === "not_configured") {
+          return okResult(
+            {
+              state: "not_configured" as const,
+              env: status.env,
+              missing_configuration: status.missingConfiguration,
+              reason: status.reason,
+              action_required: true
+            },
+            `Configurazione OAuth incompleta: ${status.missingConfiguration.join(", ")}`
+          );
+        }
+
+        const start = await startUserAuth(config);
+        const message = start.reused
+          ? "Sessione OAuth pendente gia' presente: riutilizzo consentUrl esistente."
+          : "Avviato nuovo flusso OAuth eBay. Apri consentUrl nel browser per autorizzare l'app.";
+
+        const text = [
+          "ok: true",
+          `state: pending_user_consent`,
+          `message: ${message}`,
+          "",
+          start.consentUrl,
+          "",
+          start.callbackMode === "automatic_http"
+            ? "Quando l'utente completa il consenso, il callback HTTP salvera' automaticamente il token. Polla sellbot_auth_status finche' state='authenticated'."
+            : "Dopo il consenso, copia l'URL finale dal browser e chiama sellbot_auth_complete con redirect_url=<URL>.",
+          "",
+          `callbackMode: ${start.callbackMode}`,
+          `reused: ${start.reused}`,
+          `expiresAt: ${start.expiresAt}`
+        ].join("\n");
+
+        return okResult(
+          {
+            state: "pending_user_consent" as const,
+            env: config.ebayEnv,
+            consent_url: start.consentUrl,
+            callback_mode: start.callbackMode,
+            callback_url: start.callbackUrl ?? null,
+            expires_at: start.expiresAt,
+            auth_session_id: start.authSessionId,
+            reused: start.reused,
+            previous_state: status.state,
+            action_required: true
+          },
+          message,
+          text
+        );
+      })
+  );
+
+  server.registerTool(
     "sellbot_config_test",
     {
       title: "Config Test",
@@ -294,21 +419,30 @@ export const createSellbotMcpServer = (): McpServer => {
     "sellbot_listings_list",
     {
       title: "List Listings",
-      description: "Elenca le cartelle in ToSell con stato, foto e artefatti disponibili.",
+      description:
+        "Elenca le cartelle in ToSell con stato, foto e artefatti disponibili. Accetta un parametro 'query' opzionale per filtrare per substring sullo slug (o listing_id se la query e' numerica): comodo quando l'utente fa riferimento a un'inserzione con linguaggio naturale (es. 'rosa', 'libro di Calvino').",
       inputSchema: {
         scope: z.enum(["all", "current_env"]).optional().describe("Di default mostra solo listing compatibili con l'env attivo"),
         state: z.string().optional().describe("Filtra per stato locale, es. draft|ready|published|error"),
-        published_only: z.boolean().optional().describe("Mostra solo listing pubblicate")
+        published_only: z.boolean().optional().describe("Mostra solo listing pubblicate"),
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Substring case-insensitive su slug (o su listing_id se numerico). Utile per risolvere riferimenti naturali."
+          )
       },
       outputSchema: resultSchema
     },
-    async ({ scope, state, published_only }) =>
+    async ({ scope, state, published_only, query }) =>
       withTool(async () => {
         const config = await loadRuntimeConfig();
         const listings = await listListingsSummary(config, {
           scope: scope ?? "current_env",
           state,
-          publishedOnly: published_only ?? false
+          publishedOnly: published_only ?? false,
+          query
         });
         return okResult(
           {
@@ -317,11 +451,77 @@ export const createSellbotMcpServer = (): McpServer => {
             filters: {
               scope: scope ?? "current_env",
               state: state ?? null,
-              published_only: published_only ?? false
+              published_only: published_only ?? false,
+              query: query ?? null
             },
             listings
           },
           "Elenco listing letto"
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_resolve",
+    {
+      title: "Resolve Listing",
+      description:
+        "Risolve uno slug a partire da listing_id eBay (numerico), URL eBay (es. https://www.ebay.it/itm/1234...) o query testuale sullo slug. Cerca sempre con scope='all' perche' un listing_id e' globale tra env. Restituisce zero, uno o piu' match con il reason del matching ('listing_id'|'ebay_url'|'slug_exact'|'slug_substring'). Pensato per agenti che ricevono un riferimento naturale dall'utente e devono mappare allo slug interno SENZA chiedere la cartella.",
+      inputSchema: {
+        listing_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Listing ID numerico eBay (la parte dopo /itm/ negli URL)."),
+        ebay_url: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("URL eBay completo della listing (sandbox o produzione). Il listing_id viene estratto da /itm/<id>."),
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Substring case-insensitive sullo slug (es. parte del titolo dell'inserzione)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(50)
+          .optional()
+          .describe("Numero massimo di match da restituire (default 20).")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ listing_id, ebay_url, query, limit }) =>
+      withTool(async () => {
+        if (!listing_id && !ebay_url && !query) {
+          throw new Error("Specifica almeno uno tra listing_id, ebay_url o query.");
+        }
+
+        const config = await loadRuntimeConfig();
+        const result = await resolveListings(config, {
+          listing_id,
+          ebay_url,
+          query,
+          limit
+        });
+
+        const messageParts: string[] = [];
+        if (result.not_found) {
+          messageParts.push("Nessun match trovato");
+        } else if (result.ambiguous) {
+          messageParts.push(`${result.total} match (ambigui)`);
+        } else {
+          messageParts.push(`1 match: ${result.matches[0]?.listing.slug}`);
+        }
+
+        return okResult(
+          {
+            current_env: config.ebayEnv,
+            ...result
+          },
+          messageParts.join(" — ")
         );
       })
   );
@@ -446,7 +646,12 @@ export const createSellbotMcpServer = (): McpServer => {
           })
           .optional(),
         clear_shipping: z.boolean().optional(),
-        item_specifics_set: z.record(z.string(), z.string()).optional(),
+        item_specifics_set: z
+          .record(z.string(), z.union([z.string(), z.array(z.string().min(1)).min(1)]))
+          .optional()
+          .describe(
+            "Map di specifics da impostare. Valori possono essere string (single-value) o string[] (multi-value: es. ['Italiano','Inglese']). I multi-value vengono persisti come stringa joinata con ' | ' nel draft e splittati in aspects[] durante la build per eBay."
+          ),
         item_specifics_remove: z.array(z.string().min(1)).max(100).optional()
       },
       outputSchema: resultSchema
@@ -652,6 +857,126 @@ export const createSellbotMcpServer = (): McpServer => {
         await runRevise(folder, { yes: true });
         const config = await loadRuntimeConfig();
         return okResult(await getListingSnapshot(config, folder), "Listing rivista");
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_publish_if_ready",
+    {
+      title: "Publish Listing If Ready",
+      description:
+        "Workflow guardato: esegue prepare_for_publish (enrich+intake+build+preflight) e, SE la listing risulta ready_to_publish, chiama sellbot_listing_publish. Altrimenti si ferma e restituisce blockers e check falliti senza toccare eBay. Pensato per agenti che devono pubblicare in un solo turno quando i dati sono completi, e ricevere un feedback chiaro quando manca qualcosa.",
+      inputSchema: {
+        folder: z.string().min(1),
+        module: z.enum(["auto", "generic", "book"]).optional(),
+        force_enrich: z.boolean().optional(),
+        save_intake: z.boolean().optional()
+      },
+      outputSchema: resultSchema
+    },
+    async ({ folder, module, force_enrich, save_intake }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const listing = await resolveListing(getToSellRoot(config.cwd), folder);
+
+        await runEnrich(folder, { module, force: force_enrich });
+
+        const intake = await buildListingIntakeReport(listing, {
+          moduleId: module ?? "auto"
+        });
+
+        if (save_intake ?? true) {
+          await writeIntakeReport(listing.intakePath, intake.report);
+        }
+
+        await runBuild(folder);
+        const preflight = await runPublishPreflightChecks(folder, config);
+        const preflightAllOk = preflight.checks.every((check) => check.level !== "KO");
+        const readyToPublish =
+          intake.report.summary.publish_blockers.length === 0 && preflightAllOk;
+
+        if (!readyToPublish) {
+          const snapshot = await getListingSnapshot(config, folder);
+          return okResult(
+            {
+              published: false,
+              ready_to_publish: false,
+              next_step: "resolve_missing_data_or_preflight_issues",
+              intake: intake.report,
+              preflight: {
+                all_ok: preflightAllOk,
+                checks: preflight.checks
+              },
+              snapshot
+            },
+            "Listing non pronta: pubblicazione saltata"
+          );
+        }
+
+        await runPublish(folder, { yes: true });
+        const snapshot = await getListingSnapshot(config, folder);
+
+        return okResult(
+          {
+            published: true,
+            ready_to_publish: true,
+            next_step: "monitor_or_revise",
+            intake: intake.report,
+            preflight: {
+              all_ok: preflightAllOk,
+              checks: preflight.checks
+            },
+            snapshot
+          },
+          "Listing pronta e pubblicata su eBay"
+        );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listing_end_on_ebay",
+    {
+      title: "End Listing On eBay",
+      description:
+        "Ritira la pubblicazione di una listing da eBay chiamando withdrawOffer sull'env attivo. La cartella locale resta intatta (la listing torna in stato 'draft' e puo' essere ripubblicata). Se delete_offer=true elimina anche l'offer record da Inventory API. Richiede confirm=true. Se la listing non ha offer_id registrato fallisce con OFFER_MISSING. Per cancellare anche la cartella locale, usa dopo sellbot_listing_delete (force=true non sara' piu' richiesto perche' lo stato sara' tornato a 'draft').",
+      inputSchema: {
+        folder: z.string().min(1).describe("Slug della listing o path assoluto."),
+        confirm: z
+          .literal(true)
+          .describe("Conferma esplicita richiesta: passa true solo dopo conferma dall'utente."),
+        delete_offer: z
+          .boolean()
+          .optional()
+          .describe(
+            "Se true elimina anche l'offer record da Inventory API dopo il withdraw (operazione separata: il withdraw rende non visibile la listing, il delete rimuove l'offer dal sistema)."
+          )
+      },
+      outputSchema: resultSchema
+    },
+    async ({ folder, confirm, delete_offer }) =>
+      withTool(async () => {
+        if (confirm !== true) {
+          throw new Error(
+            "Per ritirare la pubblicazione da eBay serve confirm=true (conferma esplicita dall'utente)."
+          );
+        }
+        const config = await loadRuntimeConfig();
+        const result = await endListingOnEbay(config, folder, { delete_offer });
+
+        const messageParts: string[] = [];
+        if (result.withdrawn) {
+          messageParts.push(`Listing ${result.slug} ritirata da eBay (${result.ebay_env})`);
+        } else {
+          messageParts.push(`Listing ${result.slug}: nessun withdraw eseguito`);
+        }
+        if (result.offer_deleted) {
+          messageParts.push("offer record eliminata");
+        }
+        if (result.warnings.length > 0) {
+          messageParts.push(`avvisi: ${result.warnings.length}`);
+        }
+
+        return okResult(result, messageParts.join(" — "));
       })
   );
 
@@ -873,7 +1198,7 @@ export const createSellbotMcpServer = (): McpServer => {
     {
       title: "Identify Book From Photo",
       description:
-        "Identifica titolo/autore/ISBN di un libro a partire da una foto di copertina usando il modello vision Ollama (default gemma4:e4b). Se l'identificazione e' incerta restituisce candidates vuoti: l'agente puo' decidere di chiedere all'utente.",
+        "Identifica titolo/autore/ISBN di un libro a partire da una foto di copertina usando il modello vision Ollama (default gemma4:e4b). Se l'identificazione e' incerta restituisce candidates vuoti: l'agente puo' decidere di chiedere all'utente.\n\nGESTIONE CONTESTO: se passi session_id, la response include 'recent_promotion' (se nella stessa sessione e' stata appena creata una listing, entro ~60 min). Se presente, valuta se la foto identificata e' del retro/dettaglio di quella listing prima di creare un nuovo articolo.",
       inputSchema: {
         photo_path: z
           .string()
@@ -882,11 +1207,19 @@ export const createSellbotMcpServer = (): McpServer => {
         hint: z
           .string()
           .optional()
-          .describe("Suggerimento testuale opzionale dell'utente, es. 'romanzo italiano anni '80'")
+          .describe("Suggerimento testuale opzionale dell'utente, es. 'romanzo italiano anni '80'"),
+        session_id: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe(
+            "Identificatore della sessione inbox associata. Se presente, la response include recent_promotion (listing creata di recente nella stessa sessione)."
+          )
       },
       outputSchema: resultSchema
     },
-    async ({ photo_path, hint }) =>
+    async ({ photo_path, hint, session_id }) =>
       withTool(async () => {
         const config = await loadRuntimeConfig();
         const resolvedPath = path.isAbsolute(photo_path)
@@ -899,12 +1232,20 @@ export const createSellbotMcpServer = (): McpServer => {
           hint
         });
 
-        const message =
+        const recentPromotion = session_id
+          ? await lookupRecentPromotionForResponse(config, session_id)
+          : null;
+
+        const baseMessage =
           result.match === "none"
             ? result.reason
               ? `Nessuna corrispondenza affidabile (${result.reason}): valuta di chiedere all'utente`
               : "Nessuna corrispondenza affidabile: valuta di chiedere all'utente"
             : `Candidati libro identificati (match=${result.match})`;
+
+        const message = recentPromotion
+          ? `${baseMessage}. Attenzione: la sessione ${session_id} ha promosso la listing '${recentPromotion.slug}' (~${recentPromotion.age_seconds}s fa): la foto potrebbe essere del retro/dettaglio di quella listing.`
+          : baseMessage;
 
         return okResult(
           {
@@ -913,7 +1254,8 @@ export const createSellbotMcpServer = (): McpServer => {
             match: result.match,
             candidates: result.candidates,
             elapsed_ms: result.elapsed_ms,
-            reason: result.reason ?? null
+            reason: result.reason ?? null,
+            recent_promotion: recentPromotion
           },
           message
         );

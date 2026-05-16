@@ -46,6 +46,12 @@ export interface ListListingsSummaryOptions {
   scope?: "all" | "current_env";
   state?: string;
   publishedOnly?: boolean;
+  /**
+   * Case-insensitive substring match against slug (and listing_id when the
+   * query is purely numeric). Useful for agents that receive a natural-language
+   * reference instead of a slug.
+   */
+  query?: string;
 }
 
 const derivePublishedEnv = (url: string | null): ListingPublishedEnv => {
@@ -102,6 +108,9 @@ export const listListingsSummary = async (
   const listings = await listListingFolders(getToSellRoot(config.cwd));
   const summaries = await Promise.all(listings.map((listing) => summarizeListing(config, listing.dir)));
 
+  const normalizedQuery = options.query?.trim().toLowerCase();
+  const isNumericQuery = normalizedQuery ? /^\d+$/.test(normalizedQuery) : false;
+
   return summaries.filter((summary) => {
     if ((options.scope ?? "current_env") === "current_env" && !summary.matches_current_env) {
       return false;
@@ -113,6 +122,15 @@ export const listListingsSummary = async (
 
     if (options.state && summary.state !== options.state) {
       return false;
+    }
+
+    if (normalizedQuery) {
+      const matchesSlug = summary.slug.toLowerCase().includes(normalizedQuery);
+      const matchesListingId =
+        isNumericQuery && summary.listing_id ? summary.listing_id.includes(normalizedQuery) : false;
+      if (!matchesSlug && !matchesListingId) {
+        return false;
+      }
     }
 
     return true;

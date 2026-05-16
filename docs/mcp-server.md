@@ -68,25 +68,40 @@ Autenticazione:
 - `sellbot_auth_status`
 - `sellbot_auth_start`
 - `sellbot_auth_complete`
+- `sellbot_auth_ensure` — tool all-in-one per agenti: garantisce un token utente
+  valido (gia' authenticated, oppure consentUrl da aprire). Sostituisce il
+  pattern status→start manuale richiesto da regola 6 della persona.
 
 Stato/config:
 
 - `sellbot_config_test`
-- `sellbot_listings_list`
+- `sellbot_listings_list` — supporta `query` (substring su slug o listing_id
+  se numerico)
 - `sellbot_listing_get`
+- `sellbot_listing_resolve` — risolve uno slug a partire da `listing_id`,
+  `ebay_url` (parse di `/itm/<id>`) o `query` testuale. Pensato per agenti che
+  ricevono un riferimento naturale dall'utente, copre la regola 7 della persona
 - `sellbot_remote_listings_list`
 
 Pipeline listing:
 
 - `sellbot_scan`
 - `sellbot_listing_enrich`
-- `sellbot_listing_patch_draft`
+- `sellbot_listing_patch_draft` — `item_specifics_set` accetta sia stringhe
+  che array di stringhe (multi-value: storage joinato con ` | `, split in
+  aspects[] alla build)
 - `sellbot_listing_intake_check`
 - `sellbot_listing_build`
 - `sellbot_listing_prepare_for_publish`
+- `sellbot_listing_publish_if_ready` — prepare + publish in un colpo, con
+  guard: se non `ready_to_publish` si ferma e ritorna blockers, senza toccare
+  eBay
 - `sellbot_listing_preflight`
 - `sellbot_listing_publish`
 - `sellbot_listing_revise`
+- `sellbot_listing_end_on_ebay` — `withdrawOffer` su eBay (con opzionale
+  `delete_offer`). La cartella locale resta intatta, la listing torna in stato
+  `draft`. Richiede `confirm=true`
 
 Metadata:
 
@@ -141,6 +156,10 @@ Path HTTP rilevanti:
 - `sellbot_remote_listings_list` interroga eBay sull'env attivo; per colpire la produzione serve `EBAY_ENV=prod`
 - `sellbot_remote_listings_list` usa Inventory API, quindi restituisce le offer inventory-backed e non le listing legacy create fuori da Inventory API
 - `sellbot_listing_prepare_for_publish` e' il tool workflow consigliato per agenti: enrich -> intake -> build -> preflight
+- `sellbot_listing_publish_if_ready` aggiunge il publish guardato sopra `prepare_for_publish`: se non ready, restituisce blockers senza chiamare eBay; se ready, pubblica
+- `sellbot_auth_ensure` consolida `auth_status` + `auth_start` in un solo tool: chiamalo prima di ogni operazione che richiede il token utente eBay
+- gli errori MCP includono `requires_auth` e `retryable` (con `hint` testuale) per permettere all'agente di decidere se rilanciare il flusso OAuth o ritentare
+- `sellbot_listing_end_on_ebay` ritira via `withdrawOffer`: NON cancella la cartella locale (la listing resta come `draft` ripubblicabile). Per eliminare anche l'offer record passa `delete_offer=true`
 
 ## Smoke test usato nel repo
 

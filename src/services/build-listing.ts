@@ -10,12 +10,24 @@ import { toRestMarketplaceId } from "../utils/marketplace.js";
 import { makeSku } from "../utils/sku.js";
 import { deriveDraftShippingProfile } from "../shipping/book-logistics.js";
 import { readListingDraftInputs } from "./listing-inputs.js";
+import { ITEM_SPECIFICS_MULTI_VALUE_SEPARATOR } from "./draft-patch.js";
 
 export interface BuildListingResult {
   listing: ListingPaths;
   ebayBuild: EbayBuild;
   photoFiles: string[];
 }
+
+const splitAspectValues = (raw: string): string[] => {
+  if (!raw.includes(ITEM_SPECIFICS_MULTI_VALUE_SEPARATOR.trim())) {
+    return [raw];
+  }
+
+  return raw
+    .split(/\s*\|\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+};
 
 export const normalizeAspects = (input: Record<string, string>): Record<string, string[]> => {
   const output: Record<string, string[]> = {};
@@ -28,7 +40,12 @@ export const normalizeAspects = (input: Record<string, string>): Record<string, 
       continue;
     }
 
-    output[aspectKey] = [aspectValue];
+    const values = splitAspectValues(aspectValue);
+    if (values.length === 0) {
+      continue;
+    }
+
+    output[aspectKey] = values;
   }
 
   return output;
