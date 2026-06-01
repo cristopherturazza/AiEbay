@@ -267,7 +267,7 @@ Il server MCP espone tool per:
 - auth OAuth a due step (`sellbot_auth_start`, `sellbot_auth_complete`, `sellbot_auth_status`)
 - ispezione listing (`sellbot_listings_list`, `sellbot_listing_get`, `sellbot_remote_listings_list`)
 - pipeline contenuti (`sellbot_scan`, `sellbot_listing_enrich`, `sellbot_listing_patch_draft`, `sellbot_listing_intake_check`, `sellbot_listing_build`, `sellbot_listing_prepare_for_publish`)
-- ingest da chat (`sellbot_inbox_add_photo`, `sellbot_listing_create_from_inbox`) — pensati per client tipo `tg-mcp-bot` che ricevono foto via Telegram
+- ingest da chat (`sellbot_inbox_add_photo`, `sellbot_listing_create_from_inbox`) — pensati per un front-end agent (Claude Code) che riceve foto dall'utente
 - metadata/config (`sellbot_config_test`, `sellbot_category_suggest`, `sellbot_category_conditions`, `sellbot_shipping_services`)
 - sell flow (`sellbot_listing_preflight`, `sellbot_listing_publish`, `sellbot_listing_revise`)
 

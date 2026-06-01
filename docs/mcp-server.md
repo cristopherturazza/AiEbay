@@ -54,8 +54,8 @@ Endpoint esposti:
 - health: `http://127.0.0.1:3000/healthz`
 
 Il transport SSE legacy espone lo stesso `McpServer` dello Streamable HTTP
-e va usato solo per client che non parlano ancora Streamable HTTP
-(es. OpenClaw v2026.4.9). I client nuovi devono continuare a usare `/mcp`.
+e va usato solo per client che non parlano ancora Streamable HTTP.
+I client nuovi (es. Claude Code) devono continuare a usare `/mcp`.
 
 Configurazione client HTTP pronta da copiare:
 
@@ -141,7 +141,7 @@ Il token utente continua a essere salvato in:
 Path HTTP rilevanti:
 
 - `/mcp` — Streamable HTTP (client moderni)
-- `/sse` + `/messages?sessionId=...` — SSE legacy (client pre-Streamable, es. OpenClaw v2026.4.9)
+- `/sse` + `/messages?sessionId=...` — SSE legacy (client pre-Streamable)
 - `/healthz`
 - path callback derivato da `EBAY_CALLBACK_URL`, ad esempio `/auth/ebay/callback`
 
