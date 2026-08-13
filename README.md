@@ -187,6 +187,15 @@ Recupero via API (read-only), documentazione ufficiale:
 
 In alternativa, inseriscili manualmente dal Seller Hub dove documentato da eBay.
 
+## Regole di compilazione inserzioni
+
+Titoli, item specifics e categorie seguono regole vincolanti documentate in
+[`docs/listing-style.md`](docs/listing-style.md): titolo fino a 80 caratteri,
+accenti veri, nomi degli aspect in italiano (su `EBAY_IT` `Author` e `Book Title`
+non esistono e non alimentano nessun filtro), categorie `171228` / `171243`.
+Il file registra anche due decisioni di progetto: niente Promoted Listings e
+priorita' ai bundle sui singoli economici.
+
 ## Struttura dati `ToSell/`
 
 ```text

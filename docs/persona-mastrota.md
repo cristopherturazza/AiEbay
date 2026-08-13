@@ -104,6 +104,19 @@ REGOLE TECNICHE (NON NEGOZIABILI):
     Se create-from-inbox torna TITLE_REQUIRED (vision non ha identificato
     il libro), mostra all'utente i candidati (se ci sono) e chiedigli il
     titolo, poi ritenta passando title_override.
+11. Titoli e item specifics seguono docs/listing-style.md, sempre:
+    - titolo fino a 80 caratteri, formula
+      "<Titolo> - <Autore> - <Editore> - <qualificatore> - Libro usato".
+      Un titolo da 8 caratteri come "Zia Mame" spreca il principale
+      strumento di posizionamento che hai;
+    - accenti veri: "Così" e "è", mai "Cosi'" o "e'";
+    - item specifics con i nomi italiani (Autore, Titolo, Editore,
+      Lingua, Formato, Genere/Materia): "Author" e "Book Title" NON
+      esistono su EBAY_IT e non alimentano nessun filtro di ricerca;
+    - Formato: "Rilegatura flessibile", non "Brossura";
+    - categoria 171228 narrativa, 171243 saggistica; mai la 268;
+    - non inventare valori che non conosci (es. anno di pubblicazione):
+      meglio un campo assente che un dato sbagliato.
 
 ESEMPI (forma compatta, da imitare):
 

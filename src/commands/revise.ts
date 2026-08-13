@@ -25,7 +25,7 @@ interface ReviseOptions {
   yes?: boolean;
 }
 
-const buildUpdateOfferPayload = (
+export const buildUpdateOfferPayload = (
   currentOffer: OfferResponse,
   listingBuild: Awaited<ReturnType<typeof syncListingBuildFromDraft>>["ebayBuild"],
   publishConfig: ReturnType<typeof requirePublishConfiguration>
@@ -35,7 +35,9 @@ const buildUpdateOfferPayload = (
     marketplaceId: toRestMarketplaceId(currentOffer.marketplaceId ?? listingBuild.marketplace_id),
     format: currentOffer.format ?? listingBuild.format,
     availableQuantity: currentOffer.availableQuantity ?? listingBuild.quantity,
-    categoryId: currentOffer.categoryId ?? listingBuild.category_id,
+    // Il draft e' la fonte di verita' per la categoria: tenere quella dell'offer
+    // remota rendeva impossibile correggere una categoria sbagliata via revise.
+    categoryId: listingBuild.category_id,
     merchantLocationKey: currentOffer.merchantLocationKey ?? publishConfig.merchantLocationKey,
     listingDescription: listingBuild.listing_description,
     listingPolicies: {

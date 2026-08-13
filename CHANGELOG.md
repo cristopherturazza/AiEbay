@@ -52,8 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-photo size cap (25 MB), and slug collision handling with numeric
   suffixes.
 
+- `docs/listing-style.md`: binding rules for titles, item specifics and
+  categories on `EBAY_IT`, derived from an audit of 17 real listings where 9 of
+  the 10 active ones had zero views. Key finding: the item specifics used English
+  aspect names (`Author`, `Book Title`, `Publisher`, …) which do not exist on
+  `EBAY_IT`, so they were accepted as free-form aspects and powered no search
+  filter at all. Also records two project decisions: no Promoted Listings, and
+  bundles over cheap singles.
+
 ### Fixed
 
+- `sellbot revise` now sends the category from the local draft instead of
+  keeping the one already on the remote offer. A wrong category was previously
+  impossible to correct via revise: one listing sat in category `268` (11
+  aspects, no `Titolo`/`Genere`/`Lingua`/`Formato`) instead of `171243`, cut out
+  of every filtered search in its section.
 - Include consent URL in plain text in `sellbot_auth_start` MCP tool result so
   LLM clients can quote it directly to the user. The URL is now on its own line
   in `content[0].text`, while `structuredContent.data.consentUrl` is preserved
