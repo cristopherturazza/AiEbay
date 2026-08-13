@@ -4,12 +4,25 @@ import { tmpdir } from "node:os";
 import path, { basename, extname } from "node:path";
 import { promisify } from "node:util";
 import { SellbotError } from "../errors.js";
-import { HttpClient } from "./http.js";
+import { EbayApiError, HttpClient } from "./http.js";
 
 interface MediaClientOptions {
   mediaBaseUrl: string;
   httpClient?: HttpClient;
+  /** Iniettabile nei test per non dormire davvero. */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+// createImageFromFile sbaglia a intermittenza con 500/190000 ("eBay internal
+// system or process"): lo stesso file fallisce e un istante dopo passa. Senza
+// retry basta un singolo buco per far abortire un publish da 6 foto.
+export const MEDIA_UPLOAD_ATTEMPTS = 4;
+const MEDIA_RETRY_BASE_MS = 500;
+
+const isRetryableMediaError = (error: unknown): boolean =>
+  error instanceof EbayApiError && (error.status >= 500 || error.status === 429);
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface CreateImageResponse {
   imageId?: string;
@@ -86,27 +99,45 @@ export class EbayMediaClient {
   // https://developer.ebay.com/api-docs/commerce/media/resources/image/methods/createImageFromFile
   async uploadImage(accessToken: string, filePath: string): Promise<string> {
     const prepared = await prepareImageForUpload(filePath);
+    const sleep = this.options.sleep ?? defaultSleep;
 
     try {
       const fileBuffer = await readFile(prepared.filePath);
-      const blob = new Blob([fileBuffer], { type: prepared.mimeType });
-      const form = new FormData();
-      form.append("image", blob, prepared.fileName);
+      let lastError: unknown;
 
-      const response = await this.httpClient.requestJson<CreateImageResponse>({
-        method: "POST",
-        url: `${this.options.mediaBaseUrl}/commerce/media/v1_beta/image/create_image_from_file`,
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        },
-        body: form
-      });
+      for (let attempt = 1; attempt <= MEDIA_UPLOAD_ATTEMPTS; attempt += 1) {
+        // Blob e FormData vanno ricostruiti a ogni tentativo: il body di una
+        // fetch e' consumabile una volta sola.
+        const form = new FormData();
+        form.append("image", new Blob([fileBuffer], { type: prepared.mimeType }), prepared.fileName);
 
-      if (!response?.imageUrl) {
-        throw new SellbotError("MEDIA_RESPONSE_INVALID", "Risposta createImageFromFile priva di imageUrl");
+        try {
+          const response = await this.httpClient.requestJson<CreateImageResponse>({
+            method: "POST",
+            url: `${this.options.mediaBaseUrl}/commerce/media/v1_beta/image/create_image_from_file`,
+            headers: {
+              Authorization: `Bearer ${accessToken}`
+            },
+            body: form
+          });
+
+          if (!response?.imageUrl) {
+            throw new SellbotError("MEDIA_RESPONSE_INVALID", "Risposta createImageFromFile priva di imageUrl");
+          }
+
+          return response.imageUrl;
+        } catch (error) {
+          lastError = error;
+
+          if (attempt === MEDIA_UPLOAD_ATTEMPTS || !isRetryableMediaError(error)) {
+            throw error;
+          }
+
+          await sleep(MEDIA_RETRY_BASE_MS * 2 ** (attempt - 1));
+        }
       }
 
-      return response.imageUrl;
+      throw lastError;
     } finally {
       await prepared.cleanup();
     }

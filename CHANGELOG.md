@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `EbayMediaClient.uploadImage` retries `createImageFromFile` on 5xx/429 with
+  exponential backoff (4 attempts). eBay's Media API fails intermittently with
+  `190000` ("eBay internal system or process"): the same file is rejected and
+  accepted seconds later, seemingly at random. Uploads are sequential, so a
+  single hiccup aborted an entire publish — a 6-photo bundle failed three times
+  in a row before the retry was added, then went through on the first try with
+  two images visibly retried.
 - `sellbot revise` now realigns the remote Best Offer thresholds to the draft
   price ladder (`quick_sale` → `autoAcceptPrice`, `floor` → `autoDeclinePrice`).
   The thresholds live on the remote offer and were computed against the old

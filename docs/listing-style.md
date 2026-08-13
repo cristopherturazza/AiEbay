@@ -82,6 +82,19 @@ viene scartato e perdi il filtro.
 filtri: **`Brossura` non e' un valore di eBay**, il corrispondente e'
 `Rilegatura flessibile` (il tascabile vero e' `Tascabile`).
 
+### Un solo valore per aspect
+
+`Autore` (e in generale gli aspect con cardinalita' singola) accetta **un valore
+solo**: passarne piu' di uno fa fallire il publish con errore 25002 ("Autore deve
+contenere un solo valore"). Per i lotti multi-autore usare `Autori vari` e
+`Editori vari`, mettendo i nomi veri nel titolo e nella descrizione, che sono
+comunque indicizzati.
+
+Attenzione: `sellbot_listing_patch_draft` accetta array e li persiste joinati con
+` | `, splittandoli in `aspects[]` alla build. E' corretto per gli aspect
+multi-valore (es. `Lingua`), ma su quelli a cardinalita' singola produce un
+payload che eBay rifiuta.
+
 **Non inventare valori che non conosci.** Meglio un aspect assente che un
 `Anno di pubblicazione` sbagliato: l'anno non e' recuperabile da eBay per le
 inserzioni reimportate, quindi va lasciato vuoto finche' non lo si ha dal libro
