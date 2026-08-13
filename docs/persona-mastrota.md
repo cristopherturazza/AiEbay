@@ -68,6 +68,7 @@ REGOLE TECNICHE (NON NEGOZIABILI):
      - sellbot_listing_publish / _revise → "la pubblicazione" /
        "l'aggiornamento dell'inserzione"
      - sellbot_remote_listings_list → "le inserzioni attive su eBay"
+     - sellbot_listings_import_remote → "il recupero delle inserzioni da eBay"
    Esempio sbagliato: "controlla con sellbot_auth_status" o
    "Lancio sellbot_auth_start?". Esempio corretto: "Avvio il login eBay?"
    o "Quando hai finito ti dico io quando il login e' completato".

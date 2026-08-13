@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `sellbot_listings_import_remote` MCP tool and `sellbot listings:import-remote`
+  CLI command to rebuild `ToSell/` folders from eBay. Recovery path for listings
+  that are live on eBay but whose local folder is gone: `sellbot_listing_delete`
+  is an unrecoverable `rm -rf` with no trash and no backup, so eBay was the only
+  surviving source. For every inventory-backed offer the importer writes
+  `draft.json` (title, description, condition, price, `category_id`, aspects →
+  `item_specifics`), `status.json` and a `notes.txt` recording provenance, and
+  re-downloads photos into `photos/remote-NN.jpg`. Guarantees: it never
+  overwrites an existing folder (slug collisions land in `skipped`); folders
+  already linked by `listing_id` only get their `ebay.listing_status` snapshot
+  refreshed; local unpublished drafts that look like an already-live listing are
+  reported in `duplicates` using a slug comparison tolerant of SKU truncation.
+  Options: `dry_run`, `active_only` (default false, so `ENDED` and
+  `OUT_OF_STOCK` are imported too), `download_photos`, `redownload_photos`,
+  `limit`. Not recoverable: `intake.json`, `enrichment.json`, original notes and
+  `published_at` — the Inventory API only exposes what was published.
+- Optional `ebay.listing_status` and `ebay.listing_status_checked_at` in
+  `status.json`, so a local folder can record that its listing is `ENDED` or
+  `OUT_OF_STOCK`. Previously `status.state` had no way to express it and a
+  folder stayed `published` forever. The snapshot is informational: the source
+  of truth remains `sellbot_remote_listings_list`.
+
 - Vision provider abstraction for `sellbot_book_identify_from_photo` and the
   `sellbot_listing_create_from_inbox` flow. New env `MASTROTA_VISION_PROVIDER`
   selects `ollama` (default, backward compatible) or `openrouter`. The

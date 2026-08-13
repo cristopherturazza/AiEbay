@@ -22,7 +22,11 @@ export const statusSchema = z.object({
     sku: z.string().nullable(),
     offer_id: z.string().nullable(),
     listing_id: z.string().nullable(),
-    url: z.string().nullable()
+    url: z.string().nullable(),
+    // Ultimo listingStatus visto su eBay (ACTIVE|ENDED|OUT_OF_STOCK|...): e' uno snapshot,
+    // la fonte di verita' resta sellbot_remote_listings_list.
+    listing_status: z.string().nullable().optional(),
+    listing_status_checked_at: z.string().datetime().nullable().optional()
   }),
   last_error: normalizedStatusErrorSchema.nullable()
 });

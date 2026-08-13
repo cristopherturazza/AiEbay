@@ -58,14 +58,27 @@ export interface ListRemoteListingsResult {
   listings: RemoteListingSummary[];
 }
 
-interface RemoteListingsRuntime {
+export interface RemoteListingsRuntime {
   accessToken: string;
   inventoryClient: EbayInventoryClient;
 }
 
-interface OfferWithInventoryItem {
+export interface OfferWithInventoryItem {
   inventoryItem: InventoryItemResponse;
   offer: OfferResponse;
+}
+
+export interface RemoteScanSummary {
+  inventory_items_scanned: number;
+  inventory_items_total: number | null;
+  inventory_pages: number;
+  offers_considered: number;
+  truncated: boolean;
+}
+
+export interface CollectRemoteOffersResult {
+  pairs: OfferWithInventoryItem[];
+  scan: RemoteScanSummary;
 }
 
 const clampLimit = (value: number | undefined): number => {
@@ -177,15 +190,15 @@ const isActiveRemoteOffer = (offer: OfferResponse): boolean => {
   return offer.status === "PUBLISHED" && offer.listing?.listingStatus === "ACTIVE";
 };
 
-export const listRemoteListings = async (
+export const collectRemoteOffers = async (
   config: RuntimeConfig,
   options: ListRemoteListingsOptions = {},
   runtime?: RemoteListingsRuntime
-): Promise<ListRemoteListingsResult> => {
+): Promise<CollectRemoteOffersResult> => {
   const activeOnly = options.activeOnly ?? true;
   const limit = clampLimit(options.limit);
   const api = runtime ?? (await createSellApiRuntime(config));
-  const listings: RemoteListingSummary[] = [];
+  const pairs: OfferWithInventoryItem[] = [];
 
   let inventoryOffset = 0;
   let inventoryItemsScanned = 0;
@@ -195,7 +208,7 @@ export const listRemoteListings = async (
   let exhaustedInventory = false;
   let truncated = false;
 
-  while (listings.length < limit && !exhaustedInventory) {
+  while (pairs.length < limit && !exhaustedInventory) {
     const page = await api.inventoryClient.getInventoryItems(
       api.accessToken,
       {
@@ -239,16 +252,16 @@ export const listRemoteListings = async (
           continue;
         }
 
-        listings.push(normalizeRemoteListing(config, entry.inventoryItem, entry.offer));
+        pairs.push(entry);
 
-        if (listings.length >= limit) {
+        if (pairs.length >= limit) {
           truncated =
             entryIndex < entries.length - 1 || groupIndex < offersByInventoryItem.length - 1 || pageHasMoreInventory;
           break;
         }
       }
 
-      if (listings.length >= limit) {
+      if (pairs.length >= limit) {
         break;
       }
     }
@@ -262,20 +275,34 @@ export const listRemoteListings = async (
   }
 
   return {
-    current_env: config.ebayEnv,
-    marketplace_id: config.ebayMarketplaceId,
-    total: listings.length,
-    filters: {
-      active_only: activeOnly,
-      limit
-    },
+    pairs,
     scan: {
       inventory_items_scanned: inventoryItemsScanned,
       inventory_items_total: inventoryItemsTotal,
       inventory_pages: inventoryPages,
       offers_considered: offersConsidered,
       truncated
+    }
+  };
+};
+
+export const listRemoteListings = async (
+  config: RuntimeConfig,
+  options: ListRemoteListingsOptions = {},
+  runtime?: RemoteListingsRuntime
+): Promise<ListRemoteListingsResult> => {
+  const { pairs, scan } = await collectRemoteOffers(config, options, runtime);
+  const listings = pairs.map((entry) => normalizeRemoteListing(config, entry.inventoryItem, entry.offer));
+
+  return {
+    current_env: config.ebayEnv,
+    marketplace_id: config.ebayMarketplaceId,
+    total: listings.length,
+    filters: {
+      active_only: options.activeOnly ?? true,
+      limit: clampLimit(options.limit)
     },
+    scan,
     listings
   };
 };

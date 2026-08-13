@@ -198,7 +198,7 @@ ToSell/
     enrichment.json   # output del modulo di enrichment (opzionale)
     intake.json       # report agent-friendly con dati mancanti e pricing suggestion
     ebay.json         # generato da build
-    status.json       # stato listing
+    status.json       # stato listing (+ snapshot ebay.listing_status)
   _inbox/             # staging temporaneo per upload da chat (es. Telegram)
     <session_id>/
       photos/         # foto in attesa di promozione a listing vera
@@ -266,6 +266,7 @@ Il server MCP espone tool per:
 
 - auth OAuth a due step (`sellbot_auth_start`, `sellbot_auth_complete`, `sellbot_auth_status`)
 - ispezione listing (`sellbot_listings_list`, `sellbot_listing_get`, `sellbot_remote_listings_list`)
+- recupero locale (`sellbot_listings_import_remote`) per ricostruire da eBay le cartelle sparite da `ToSell/`
 - pipeline contenuti (`sellbot_scan`, `sellbot_listing_enrich`, `sellbot_listing_patch_draft`, `sellbot_listing_intake_check`, `sellbot_listing_build`, `sellbot_listing_prepare_for_publish`)
 - ingest da chat (`sellbot_inbox_add_photo`, `sellbot_listing_create_from_inbox`) — pensati per un front-end agent (Claude Code) che riceve foto dall'utente
 - metadata/config (`sellbot_config_test`, `sellbot_category_suggest`, `sellbot_category_conditions`, `sellbot_shipping_services`)
@@ -283,6 +284,7 @@ Nota importante:
 - `sellbot_listings_list` usa di default `scope=current_env`, quindi in `prod` non mostra le listing sandbox gia' pubblicate salvo richiesta esplicita
 - `sellbot_remote_listings_list` interroga davvero eBay sull'env attivo; per la produzione usare `EBAY_ENV=prod`
 - `sellbot_remote_listings_list` usa Inventory API: vede le offer inventory-backed dell'account, non le listing legacy create fuori da Inventory API
+- `sellbot_listings_import_remote` non sovrascrive mai una cartella esistente: le collisioni di slug finiscono in `skipped`. Provalo prima con `dry_run=true`
 - per correzioni incrementali del contenuto, il tool giusto e' `sellbot_listing_patch_draft`
 - per agenti, il tool workflow consigliato e' `sellbot_listing_prepare_for_publish`
 - i tool `publish` e `revise` via MCP equivalgono a `--yes`
@@ -351,6 +353,26 @@ Nota pratica:
 - non pubblica nulla
 
 Nota: su macOS le foto `.heic` vengono convertite automaticamente in JPEG al momento dell'upload verso eBay, per compatibilità pratica con la Media API sandbox.
+
+### `sellbot listings:import-remote`
+
+Ricostruisce sotto `ToSell/` le cartelle delle listing che esistono su eBay ma non in locale (per esempio dopo che una cartella è stata cancellata: la cancellazione è un `rm -rf`, non c'è cestino).
+
+- legge le offer via Inventory API e per ognuna scrive `draft.json`, `status.json` e `notes.txt`
+- riscarica le foto dalla CDN eBay in `photos/remote-NN.jpg`, promuovendo l'URL alla variante a piena risoluzione (`$_1.JPG` è la miniatura da 300px, `$_57.JPG` è il master)
+- le cartelle già collegate per `listing_id` non vengono ricostruite: ne viene solo aggiornato lo snapshot `ebay.listing_status` (es. `ACTIVE` → `ENDED`)
+- non sovrascrive **mai** una cartella esistente: le collisioni di slug finiscono in `skipped`
+- segnala in `duplicates` le bozze locali non pubblicate che somigliano a una listing già online, confrontando gli slug in modo tollerante al troncamento della SKU
+
+Opzioni:
+
+- `--dry-run` mostra il piano senza scrivere nulla
+- `--active-only` importa solo le `ACTIVE` (default: anche `ENDED` e `OUT_OF_STOCK`)
+- `--no-photos` salta il download delle immagini
+- `--redownload-photos` riscarica le foto anche per le cartelle già collegate; tocca solo i file `remote-*` e si autoesclude se la cartella contiene foto scattate a mano, per non creare doppioni in un revise
+- `--limit <n>`, `--json`
+
+Non recuperabile: `intake.json`, `enrichment.json`, le note originali e `published_at`. eBay conserva solo ciò che è stato pubblicato (titolo, descrizione, aspects, foto, prezzo).
 
 ### `sellbot build <folder>`
 
@@ -557,6 +579,8 @@ Coperti:
 
 - validazione zod (`draft.json`, `status.json`)
 - parsing cartelle e filtro file immagini
+- import da remoto: derivazione slug dalla SKU, rilevamento doppioni, upgrade
+  degli URL immagine eBay, guardie anti-sovrascrittura e anti-doppione foto
 
 ## Troubleshooting
 

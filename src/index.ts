@@ -9,6 +9,7 @@ import { runCategorySuggest } from "./commands/category-suggest.js";
 import { runConfigTest } from "./commands/config-test.js";
 import { runEnrich } from "./commands/enrich.js";
 import { runIntakeCheck } from "./commands/intake-check.js";
+import { runListingsImportRemote } from "./commands/listings-import-remote.js";
 import { runNotificationsServe } from "./commands/notifications-serve.js";
 import { runOpen } from "./commands/open.js";
 import { runPublishPreflight } from "./commands/publish-preflight.js";
@@ -47,6 +48,26 @@ program
   .command("scan")
   .description("Scansiona ToSell/* e crea/aggiorna draft/status senza pubblicare")
   .action(async () => runCommand(runScan));
+
+program
+  .command("listings:import-remote")
+  .description("Ricostruisce sotto ToSell/ le cartelle delle listing presenti su eBay ma non in locale")
+  .option("--dry-run", "non scrive nulla, mostra solo cosa verrebbe importato")
+  .option("--active-only", "importa solo le listing ACTIVE (default: anche ENDED)")
+  .option("--no-photos", "non riscaricare le foto dalla CDN eBay")
+  .option("--redownload-photos", "riscarica le foto anche per le cartelle gia' collegate (sostituisce solo i file remote-*)")
+  .option("--limit <n>", "numero massimo di listing remote da considerare")
+  .option("--json", "stampa il risultato completo in JSON")
+  .action(
+    async (options: {
+      dryRun?: boolean;
+      activeOnly?: boolean;
+      photos?: boolean;
+      redownloadPhotos?: boolean;
+      limit?: string;
+      json?: boolean;
+    }) => runCommand(() => runListingsImportRemote(options))
+  );
 
 program
   .command("mcp")

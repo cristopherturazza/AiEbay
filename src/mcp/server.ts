@@ -42,6 +42,7 @@ import {
   type DeletableState
 } from "../services/listing-delete.js";
 import { endListingOnEbay } from "../services/listing-end-on-ebay.js";
+import { importRemoteListings } from "../services/listings-import-remote.js";
 import { resolveListings } from "../services/listing-resolve.js";
 import { getListingSnapshot, listListingsSummary } from "../services/listing-snapshot.js";
 import { listRemoteListings } from "../services/remote-listings.js";
@@ -574,6 +575,60 @@ export const createSellbotMcpServer = (): McpServer => {
           }),
           "Elenco listing remote letto da eBay"
         );
+      })
+  );
+
+  server.registerTool(
+    "sellbot_listings_import_remote",
+    {
+      title: "Import Remote Listings",
+      description:
+        "Ricostruisce sotto ToSell/ le cartelle delle listing che esistono su eBay ma non in locale (draft.json, status.json, notes.txt e foto riscaricate dalla CDN eBay). Le cartelle gia' collegate per listing_id non vengono toccate: ne viene solo aggiornato lo snapshot ebay.listing_status (es. ACTIVE→ENDED). Non sovrascrive MAI una cartella esistente: le collisioni di slug finiscono in 'skipped'. Segnala in 'duplicates' le bozze locali non pubblicate che somigliano a una listing gia' online. Usa dry_run=true per vedere l'esito prima di scrivere.",
+      inputSchema: {
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe("Se true non scrive nulla su disco e restituisce solo il piano di import."),
+        active_only: z
+          .boolean()
+          .optional()
+          .describe("Di default false: importa anche le listing ENDED/OUT_OF_STOCK, non solo le ACTIVE."),
+        download_photos: z
+          .boolean()
+          .optional()
+          .describe("Di default true: riscarica le foto dalla CDN eBay dentro photos/."),
+        redownload_photos: z
+          .boolean()
+          .optional()
+          .describe(
+            "Se true riscarica le foto anche per le cartelle gia' collegate: sostituisce solo i file remote-*, le foto aggiunte a mano restano."
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe("Numero massimo di listing remote da considerare (default 100)")
+      },
+      outputSchema: resultSchema
+    },
+    async ({ dry_run, active_only, download_photos, redownload_photos, limit }) =>
+      withTool(async () => {
+        const config = await loadRuntimeConfig();
+        const result = await importRemoteListings(config, {
+          dryRun: dry_run,
+          activeOnly: active_only,
+          downloadPhotos: download_photos,
+          redownloadPhotos: redownload_photos,
+          limit
+        });
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        const message =
+          `${prefix}${result.imported.length} cartelle ricostruite, ${result.refreshed.length} aggiornate, ` +
+          `${result.skipped.length} saltate su ${result.remote_total} listing remote.` +
+          (result.duplicates.length > 0 ? ` Attenzione: ${result.duplicates.length} possibili doppioni locali.` : "");
+        return okResult(result, message);
       })
   );
 

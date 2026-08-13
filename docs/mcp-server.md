@@ -82,6 +82,9 @@ Stato/config:
   `ebay_url` (parse di `/itm/<id>`) o `query` testuale. Pensato per agenti che
   ricevono un riferimento naturale dall'utente, copre la regola 7 della persona
 - `sellbot_remote_listings_list`
+- `sellbot_listings_import_remote` — ricostruisce da eBay le cartelle mancanti
+  sotto `ToSell/`. Recupero dopo una cancellazione locale (la delete e' un
+  `rm -rf`, senza cestino ne' backup)
 
 Pipeline listing:
 
@@ -160,6 +163,8 @@ Path HTTP rilevanti:
 - `sellbot_auth_ensure` consolida `auth_status` + `auth_start` in un solo tool: chiamalo prima di ogni operazione che richiede il token utente eBay
 - gli errori MCP includono `requires_auth` e `retryable` (con `hint` testuale) per permettere all'agente di decidere se rilanciare il flusso OAuth o ritentare
 - `sellbot_listing_end_on_ebay` ritira via `withdrawOffer`: NON cancella la cartella locale (la listing resta come `draft` ripubblicabile). Per eliminare anche l'offer record passa `delete_offer=true`
+- `sellbot_listings_import_remote` e' l'inverso di `sellbot_listing_delete`: non sovrascrive mai una cartella esistente (collisioni in `skipped`), aggiorna solo `ebay.listing_status` su quelle gia' collegate per `listing_id`, e riscarica le foto alla variante piena (`$_57.JPG`, non la miniatura `$_1.JPG` restituita dalle `imageUrls`). Usa `dry_run=true` per vedere il piano prima di scrivere
+- `redownload_photos=true` sostituisce solo i file `remote-*` e si autoesclude sulle cartelle che contengono foto scattate a mano: altrimenti un revise ripubblicherebbe due volte gli stessi scatti
 
 ## Smoke test usato nel repo
 
