@@ -62,6 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `sellbot revise` now realigns the remote Best Offer thresholds to the draft
+  price ladder (`quick_sale` → `autoAcceptPrice`, `floor` → `autoDeclinePrice`).
+  The thresholds live on the remote offer and were computed against the old
+  price, so any price cut made them invalid and eBay rejected the whole revise
+  with error 25016 ("l'importo per il rifiuto automatico non può essere pari o
+  superiore al prezzo Compralo Subito"). Lowering a price was effectively
+  impossible on any listing with Best Offer enabled.
+- `looksLikeBookDraft` no longer depends on English item specific names. It read
+  `item_specifics["Book Title"]`, `.Author`, `.Publisher` and `.ISBN`, which do
+  not exist on `EBAY_IT` (see `docs/listing-style.md`): drafts using the correct
+  Italian aspect names were not recognised as books and silently lost their
+  shipping profile, falling back to the single-book rate. Detection now accepts
+  both namings and treats the presence of a book aspect as sufficient, so a
+  bundle titled "2 Romanzi storici: …" resolves to `book_heavy` as it should.
 - `sellbot revise` now sends the category from the local draft instead of
   keeping the one already on the remote offer. A wrong category was previously
   impossible to correct via revise: one listing sat in category `268` (11

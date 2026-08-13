@@ -117,20 +117,43 @@ const getSpecificValue = (draft: Draft, keys: string[]): string | undefined => {
   return undefined;
 };
 
+// I nomi degli item specifics sono localizzati per marketplace: su EBAY_IT sono
+// in italiano (Autore, Editore, Titolo), non in inglese. Il riconoscimento deve
+// reggere entrambe le forme, altrimenti un draft corretto per eBay Italia non
+// verrebbe piu' riconosciuto come libro e perderebbe il profilo di spedizione.
+const BOOK_SPECIFIC_KEYS = new Set([
+  "isbn",
+  "ean",
+  "autore",
+  "author",
+  "editore",
+  "publisher",
+  "titolo",
+  "book title",
+  "pagine",
+  "pages"
+]);
+
 export const looksLikeBookDraft = (draft: Draft): boolean => {
   const haystack = [
     draft.category_hint,
     draft.title,
-    draft.item_specifics["Book Title"],
-    draft.item_specifics.Author,
-    draft.item_specifics.Publisher,
-    draft.item_specifics.ISBN
+    getSpecificValue(draft, ["Book Title", "Titolo"]),
+    getSpecificValue(draft, ["Author", "Autore"]),
+    getSpecificValue(draft, ["Publisher", "Editore"]),
+    getSpecificValue(draft, ["ISBN"])
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 
-  return /\b(libro|libri|book|books|isbn|autore|author|publisher|editore)\b/i.test(haystack);
+  if (/\b(libro|libri|book|books|isbn|autore|author|publisher|editore|romanzo|romanzi)\b/i.test(haystack)) {
+    return true;
+  }
+
+  // La sola presenza di un aspect da libro basta: un bundle intitolato
+  // "2 Romanzi storici: ..." non contiene nessuna delle parole chiave sopra.
+  return Object.keys(draft.item_specifics).some((key) => BOOK_SPECIFIC_KEYS.has(key.trim().toLowerCase()));
 };
 
 export const extractBookShippingFactsFromDraft = (draft: Draft): BookShippingFacts => {

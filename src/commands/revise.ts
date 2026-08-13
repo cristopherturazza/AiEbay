@@ -25,11 +25,86 @@ interface ReviseOptions {
   yes?: boolean;
 }
 
+interface BestOfferAmount {
+  value: string;
+  currency: string;
+}
+
+interface BestOfferTerms {
+  bestOfferEnabled?: boolean;
+  autoAcceptPrice?: BestOfferAmount;
+  autoDeclinePrice?: BestOfferAmount;
+  [key: string]: unknown;
+}
+
+const asAmount = (value: number, currency: string): BestOfferAmount => ({
+  value: value.toFixed(2),
+  currency
+});
+
+/**
+ * Le soglie di Proposta d'acquisto vivono sull'offer remota e sono calcolate sul
+ * prezzo di allora. Abbassando il prezzo via revise diventano invalide ed eBay
+ * risponde 25016 ("l'importo per il rifiuto automatico non puo' essere pari o
+ * superiore al prezzo Compralo Subito"). Vanno riallineate al listino del draft.
+ */
+export const realignBestOfferTerms = (
+  current: unknown,
+  price: { value: string; currency: string },
+  ladder: { quickSale?: number; floor?: number }
+): BestOfferTerms | undefined => {
+  if (typeof current !== "object" || current === null) {
+    return undefined;
+  }
+
+  const terms = { ...(current as BestOfferTerms) };
+  if (terms.bestOfferEnabled !== true) {
+    return terms;
+  }
+
+  const target = Number(price.value);
+  const currency = price.currency;
+  if (!Number.isFinite(target) || target <= 0) {
+    return terms;
+  }
+
+  const previousAccept = Number(terms.autoAcceptPrice?.value);
+  const previousDecline = Number(terms.autoDeclinePrice?.value);
+
+  // Il ladder del draft (quick_sale 90%, floor 80%) e' la fonte preferita;
+  // senza ladder si tengono i valori remoti solo se ancora sotto il prezzo.
+  let accept = ladder.quickSale ?? (Number.isFinite(previousAccept) ? previousAccept : target * 0.9);
+  let decline = ladder.floor ?? (Number.isFinite(previousDecline) ? previousDecline : target * 0.8);
+
+  if (accept >= target) {
+    accept = target * 0.9;
+  }
+  if (decline >= accept) {
+    decline = accept * 0.9;
+  }
+
+  if (terms.autoAcceptPrice !== undefined) {
+    terms.autoAcceptPrice = asAmount(accept, terms.autoAcceptPrice.currency || currency);
+  }
+  if (terms.autoDeclinePrice !== undefined) {
+    terms.autoDeclinePrice = asAmount(decline, terms.autoDeclinePrice.currency || currency);
+  }
+
+  return terms;
+};
+
 export const buildUpdateOfferPayload = (
   currentOffer: OfferResponse,
   listingBuild: Awaited<ReturnType<typeof syncListingBuildFromDraft>>["ebayBuild"],
-  publishConfig: ReturnType<typeof requirePublishConfiguration>
+  publishConfig: ReturnType<typeof requirePublishConfiguration>,
+  priceLadder: { quickSale?: number; floor?: number } = {}
 ): UpdateOfferPayload => {
+  const bestOfferTerms = realignBestOfferTerms(
+    currentOffer.listingPolicies?.bestOfferTerms,
+    listingBuild.pricing_summary.price,
+    priceLadder
+  );
+
   const payload: UpdateOfferPayload = {
     sku: currentOffer.sku ?? listingBuild.sku,
     marketplaceId: toRestMarketplaceId(currentOffer.marketplaceId ?? listingBuild.marketplace_id),
@@ -44,7 +119,8 @@ export const buildUpdateOfferPayload = (
       ...(currentOffer.listingPolicies ?? {}),
       fulfillmentPolicyId: publishConfig.policies.fulfillmentPolicyId,
       paymentPolicyId: publishConfig.policies.paymentPolicyId,
-      returnPolicyId: publishConfig.policies.returnPolicyId
+      returnPolicyId: publishConfig.policies.returnPolicyId,
+      ...(bestOfferTerms ? { bestOfferTerms } : {})
     },
     listingDuration: currentOffer.listingDuration ?? listingBuild.listing_duration,
     pricingSummary: listingBuild.pricing_summary
@@ -144,7 +220,10 @@ export const runRevise = async (folder: string, options: ReviseOptions): Promise
     });
 
     const currentOffer = await runtime.inventoryClient.getOffer(runtime.accessToken, offerId, ebayBuild.locale);
-    const updatePayload = buildUpdateOfferPayload(currentOffer, ebayBuild, publishConfig);
+    const updatePayload = buildUpdateOfferPayload(currentOffer, ebayBuild, publishConfig, {
+      quickSale: draft.price.quick_sale,
+      floor: draft.price.floor
+    });
 
     await runtime.inventoryClient.updateOffer(runtime.accessToken, offerId, updatePayload, ebayBuild.locale);
 
